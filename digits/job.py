@@ -9,6 +9,7 @@ import shutil
 import flask
 
 from digits.config import config_value
+from digits.utils import sizeof_fmt, filesystem as fs
 from status import Status, StatusCls
 
 # NOTE: Increment this everytime the pickled object changes
@@ -55,6 +56,7 @@ class Job(StatusCls):
         self.pickver_job = PICKLE_VERSION
         self.tasks = []
         self.exception = None
+        self._notes = None
 
         os.mkdir(self._dir)
 
@@ -132,6 +134,12 @@ class Job(StatusCls):
     def name(self):
         return self._name
 
+    def notes(self):
+        if hasattr(self, '_notes'):
+            return self._notes
+        else:
+            return None
+
     def job_type(self):
         """
         String representation for this class
@@ -186,4 +194,11 @@ class Job(StatusCls):
         except Exception as e:
             print 'Caught %s while saving job: %s' % (type(e).__name__, e)
         return False
+
+    def disk_size_fmt(self):
+        """
+        return string representing job disk size
+        """
+        size = fs.get_tree_size(self._dir)
+        return sizeof_fmt(size)
 

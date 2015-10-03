@@ -4,16 +4,10 @@ import os
 import re
 import tempfile
 import random
-
+import shutil
 import flask
 import werkzeug.exceptions
 import numpy as np
-from google.protobuf import text_format
-try:
-    import caffe_pb2
-except ImportError:
-    # See issue #32
-    from caffe.proto import caffe_pb2
 
 import digits
 from digits.config import config_value
@@ -21,11 +15,12 @@ from digits import utils
 from digits.utils.routing import request_wants_json, job_from_request
 from digits.webapp import app, scheduler, autodoc
 from digits.dataset import ImageClassificationDatasetJob
-from digits.model import tasks
+from digits import frameworks
 from forms import ImageClassificationModelForm
 from job import ImageClassificationModelJob
 from digits.status import Status
 import platform
+from digits.utils import errors
 
 NAMESPACE   = '/models/images/classification'
 
@@ -45,7 +40,9 @@ def image_classification_model_new():
 
     return flask.render_template('models/images/classification/new.html',
             form = form,
+            frameworks = frameworks.get_frameworks(),
             previous_network_snapshots = prev_network_snapshots,
+            previous_networks_fullinfo = get_previous_networks_fulldetails(),
             multi_gpu = config_value('caffe_root')['multi_gpu'],
             )
 
@@ -72,7 +69,9 @@ def image_classification_model_create():
         else:
             return flask.render_template('models/images/classification/new.html',
                     form = form,
+                    frameworks = frameworks.get_frameworks(),
                     previous_network_snapshots = prev_network_snapshots,
+                    previous_networks_fullinfo = get_previous_networks_fulldetails(),
                     multi_gpu = config_value('caffe_root')['multi_gpu'],
                     ), 400
 
@@ -87,21 +86,19 @@ def image_classification_model_create():
                 name        = form.model_name.data,
                 dataset_id  = datasetJob.id(),
                 )
+        # get handle to framework object
+        fw = frameworks.get_framework_by_id(form.framework.data)
 
-        network = caffe_pb2.NetParameter()
         pretrained_model = None
         if form.method.data == 'standard':
             found = False
-            networks_dir = os.path.join(os.path.dirname(digits.__file__), 'standard-networks')
-            for filename in os.listdir(networks_dir):
-                path = os.path.join(networks_dir, filename)
-                if os.path.isfile(path):
-                    match = re.match(r'%s.prototxt' % form.standard_networks.data, filename)
-                    if match:
-                        with open(path) as infile:
-                            text_format.Merge(infile.read(), network)
-                        found = True
-                        break
+
+            # can we find it in standard networks?
+            network_desc = fw.get_standard_network_desc(form.standard_networks.data)
+            if network_desc:
+                found = True
+                network = fw.get_network_from_desc(network_desc)
+
             if not found:
                 raise werkzeug.exceptions.BadRequest(
                         'Unknown standard model "%s"' % form.standard_networks.data)
@@ -111,17 +108,16 @@ def image_classification_model_create():
                 raise werkzeug.exceptions.BadRequest(
                         'Job not found: %s' % form.previous_networks.data)
 
-            network.CopyFrom(old_job.train_task().network)
-            # Rename the final layer
-            # XXX making some assumptions about network architecture here
-            ip_layers = [l for l in network.layer if l.type == 'InnerProduct']
-            if len(ip_layers) > 0:
-                ip_layers[-1].name = '%s_retrain' % ip_layers[-1].name
+            network = fw.get_network_from_previous(old_job.train_task().network)
 
             for choice in form.previous_networks.choices:
                 if choice[0] == form.previous_networks.data:
                     epoch = float(flask.request.form['%s-snapshot' % form.previous_networks.data])
-                    if epoch != 0:
+                    if epoch == 0:
+                        pass
+                    elif epoch == -1:
+                        pretrained_model = old_job.train_task().pretrained_model
+                    else:
                         for filename, e in old_job.train_task().snapshots:
                             if e == epoch:
                                 pretrained_model = filename
@@ -137,7 +133,7 @@ def image_classification_model_create():
                     break
 
         elif form.method.data == 'custom':
-            text_format.Merge(form.custom_network.data, network)
+            network = fw.get_network_from_desc(form.custom_network.data)
             pretrained_model = form.custom_network_snapshot.data.strip()
         else:
             raise werkzeug.exceptions.BadRequest(
@@ -184,8 +180,7 @@ def image_classification_model_create():
                 selected_gpus = [str(form.select_gpu.data)]
                 gpu_count = None
 
-        job.tasks.append(
-                tasks.CaffeTrainTask(
+        job.tasks.append(fw.create_train_task(
                     job_dir         = job.dir(),
                     dataset         = datasetJob,
                     train_epochs    = form.train_epochs.data,
@@ -202,6 +197,7 @@ def image_classification_model_create():
                     network         = network,
                     random_seed     = form.random_seed.data,
                     solver_type     = form.solver_type.data,
+                    shuffle         = form.shuffle.data,
                     )
                 )
 
@@ -220,7 +216,7 @@ def show(job):
     """
     Called from digits.model.views.models_show()
     """
-    return flask.render_template('models/images/classification/show.html', job=job)
+    return flask.render_template('models/images/classification/show.html', job=job, framework_ids = [fw.get_id() for fw in frameworks.get_frameworks()])
 
 @app.route(NAMESPACE + '/large_graph', methods=['GET'])
 @autodoc('models')
@@ -275,14 +271,21 @@ def image_classification_model_classify_one():
     if 'show_visualizations' in flask.request.form and flask.request.form['show_visualizations']:
         layers = 'all'
 
-    predictions, visualizations = job.train_task().infer_one(image, snapshot_epoch=epoch, layers=layers)
+    predictions, visualizations = None, None
+    try:
+        predictions, visualizations = job.train_task().infer_one(image, snapshot_epoch=epoch, layers=layers)
+    except frameworks.errors.InferenceError as e:
+        return e.__str__(), 403
+
     # take top 5
-    predictions = [(p[0], round(100.0*p[1],2)) for p in predictions[:5]]
+    if predictions:
+        predictions = [(p[0], round(100.0*p[1],2)) for p in predictions[:5]]
 
     if request_wants_json():
         return flask.jsonify({'predictions': predictions})
     else:
         return flask.render_template('models/images/classification/classify_one.html',
+                job             = job,
                 image_src       = utils.image.embed_image_html(image),
                 predictions     = predictions,
                 visualizations  = visualizations,
@@ -368,10 +371,11 @@ def image_classification_model_classify_many():
         return flask.jsonify({'classifications': joined})
     else:
         return flask.render_template('models/images/classification/classify_many.html',
-                paths=paths,
-                classifications=classifications,
-                show_ground_truth=not(ground_truths == [None]*len(ground_truths)),
-                ground_truths=ground_truths
+                job             = job,
+                paths           = paths,
+                classifications = classifications,
+                show_ground_truth= not(ground_truths == [None]*len(ground_truths)),
+                ground_truths   = ground_truths
                 )
 
 @app.route(NAMESPACE + '/top_n', methods=['POST'])
@@ -481,12 +485,21 @@ def get_previous_networks():
         )
         ]
 
+def get_previous_networks_fulldetails():
+    return [(j) for j in sorted(
+        [j for j in scheduler.jobs if isinstance(j, ImageClassificationModelJob)],
+        cmp=lambda x,y: cmp(y.id(), x.id())
+        )
+        ]
+
 def get_previous_network_snapshots():
     prev_network_snapshots = []
     for job_id, _ in get_previous_networks():
         job = scheduler.get_job(job_id)
         e = [(0, 'None')] + [(epoch, 'Epoch #%s' % epoch)
                 for _, epoch in reversed(job.train_task().snapshots)]
+        if job.train_task().pretrained_model:
+            e.insert(0, (-1, 'Previous pretrained model'))
         prev_network_snapshots.append(e)
     return prev_network_snapshots
 

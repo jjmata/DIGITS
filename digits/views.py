@@ -3,12 +3,14 @@
 import json
 import traceback
 import glob
+import platform
 
 import flask
 from werkzeug import HTTP_STATUS_CODES
 import werkzeug.exceptions
 from flask.ext.socketio import join_room, leave_room
 
+import digits
 from . import dataset, model
 from config import config_value
 from webapp import app, socketio, scheduler, autodoc
@@ -16,6 +18,7 @@ import dataset.views
 import model.views
 from digits.utils import errors
 from digits.utils.routing import request_wants_json
+from digits.log import logger
 
 @app.route('/index.json', methods=['GET'])
 @app.route('/', methods=['GET'])
@@ -37,12 +40,17 @@ def home():
     completed_models    = get_job_list(model.ModelJob, False)
 
     if request_wants_json():
-        return flask.jsonify({
-            'datasets': [j.json_dict()
-                for j in running_datasets + completed_datasets],
-            'models': [j.json_dict()
-                for j in running_models + completed_models],
-            })
+        data = {
+                'version': digits.__version__,
+                'jobs_dir': config_value('jobs_dir'),
+                'datasets': [j.json_dict()
+                    for j in running_datasets + completed_datasets],
+                'models': [j.json_dict()
+                    for j in running_models + completed_models],
+                }
+        if config_value('server_name'):
+            data['server_name'] = config_value('server_name')
+        return flask.jsonify(data)
     else:
         new_dataset_options = [
                 ('Images', [
@@ -115,15 +123,29 @@ def show_job(job_id):
 @autodoc('jobs')
 def edit_job(job_id):
     """
-    Edit the name of a job
+    Edit a job's name and/or notes
     """
     job = scheduler.get_job(job_id)
     if job is None:
         raise werkzeug.exceptions.NotFound('Job not found')
 
-    old_name = job.name()
-    job._name = flask.request.form['job_name']
-    return 'Changed job name from "%s" to "%s"' % (old_name, job.name())
+    # Edit name
+    if 'job_name' in flask.request.form:
+        name = flask.request.form['job_name'].strip()
+        if not name:
+            raise werkzeug.exceptions.BadRequest('name cannot be blank')
+        job._name = name
+        logger.info('Set name to "%s".' % job.name(), job_id=job.id())
+
+    # Edit notes
+    if 'job_notes' in flask.request.form:
+        notes = flask.request.form['job_notes'].strip()
+        if not notes:
+            notes = None
+        job._notes = notes
+        logger.info('Updated notes.', job_id=job.id())
+
+    return '%s updated.' % job.job_type()
 
 @app.route('/datasets/<job_id>/status', methods=['GET'])
 @app.route('/models/<job_id>/status', methods=['GET'])
@@ -220,7 +242,8 @@ def handle_error(e):
 # Register this handler for all error codes
 # Necessary for flask<=0.10.1
 for code in HTTP_STATUS_CODES:
-    app.register_error_handler(code, handle_error)
+    if code not in [301]:
+        app.register_error_handler(code, handle_error)
 
 ### File serving
 
@@ -246,9 +269,13 @@ def path_autocomplete():
 
     """
     path = flask.request.args.get('query','')
+    suggestions = glob.glob(path+"*")
+    if platform.system() == 'Windows':
+        # on windows, convert backslashes with forward slashes
+        suggestions = [p.replace('\\', '/') for p in suggestions]
 
     result = {
-        "suggestions": glob.glob(path+"*")
+        "suggestions": suggestions
     }
 
     return json.dumps(result)

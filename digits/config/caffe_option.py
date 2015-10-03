@@ -8,6 +8,7 @@ import platform
 import subprocess
 
 from digits import device_query
+from digits.utils import parse_version
 import config_option
 import prompt
 
@@ -123,9 +124,9 @@ class CaffeOption(config_option.FrameworkOption):
         Arguments:
         executable -- path to a caffe executable
         """
-        minimum_version = (0,11)
-
+        minimum_version = parse_version(0,11,0)
         version = cls.get_version(executable)
+
         if version is None:
             raise config_option.BadValue('Could not get version information from caffe at "%s". Are you using the NVIDIA fork?'
                     % executable)
@@ -178,20 +179,20 @@ class CaffeOption(config_option.FrameworkOption):
                             % (filename, NVIDIA_SUFFIX))
 
                 # parse the version string
-                match = re.match(r'%s%s\.so\.((\d|\.)+)$'
+                match = re.match(r'%s%s\.so\.(\S+)$'
                         % (libname, NVIDIA_SUFFIX), filename)
                 if match:
                     version_str = match.group(1)
-                    return tuple(int(n) for n in version_str.split('.'))
+                    return parse_version(version_str)
                 else:
                     return None
 
         elif platform.system() == 'Darwin':
             # XXX: guess and let the user figure out errors later
-            return (0,11,0)
+            return parse_version(0,11,0)
         elif platform.system() == 'Windows':
             # XXX: guess and let the user figure out errors later
-            return (0,11,0)
+            return parse_version(0,11,0)
         else:
             print 'WARNING: platform "%s" not supported' % platform.system()
             return None
@@ -209,7 +210,7 @@ class CaffeOption(config_option.FrameworkOption):
 
             version = self.get_version(executable)
 
-            if version >= (0,12):
+            if version >= parse_version(0,12):
                 multi_gpu = True
             else:
                 multi_gpu = False
@@ -245,10 +246,9 @@ class CaffeOption(config_option.FrameworkOption):
                 print 'Did you forget to "make pycaffe"?'
                 raise
 
-            if platform.system() == 'Darwin' or platform.system() == 'Windows':
-                # Strange issue with protocol buffers and pickle - see issue #32
-                sys.path.insert(0, os.path.join(
-                    os.path.dirname(caffe.__file__), 'proto'))
+            # Strange issue with protocol buffers and pickle - see issue #32
+            sys.path.insert(0, os.path.join(
+                os.path.dirname(caffe.__file__), 'proto'))
 
             # Turn GLOG output back on for subprocess calls
             if GLOG_minloglevel is None:

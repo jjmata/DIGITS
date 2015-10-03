@@ -18,12 +18,7 @@ from bs4 import BeautifulSoup
 import PIL.Image
 from urlparse import urlparse
 from cStringIO import StringIO
-
-try:
-    import caffe_pb2
-except ImportError:
-    # See issue #32
-    from caffe.proto import caffe_pb2
+import caffe_pb2
 
 import digits.webapp
 import digits.test_views
@@ -31,8 +26,8 @@ import digits.dataset.images.classification.test_views
 from digits.config import config_value
 
 # May be too short on a slow system
-TIMEOUT_DATASET = 15
-TIMEOUT_MODEL = 20
+TIMEOUT_DATASET = 20
+TIMEOUT_MODEL = 30
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -69,6 +64,26 @@ layer {
 }
 """
 
+    TORCH_NETWORK = \
+"""
+require 'nn'
+local model = nn.Sequential()
+model:add(nn.View(-1):setNumInputDims(3)) -- 10*10*3 -> 300
+model:add(nn.Linear(300, 3))
+model:add(nn.LogSoftMax())
+return function(params)
+    return {
+        model = model
+    }
+end
+"""
+
+    @classmethod
+    def setUpClass(cls):
+        super(BaseViewsTest, cls).setUpClass()
+        if cls.FRAMEWORK=='torch' and not config_value('torch_root'):
+            raise unittest.SkipTest('Torch not found')
+
     @classmethod
     def model_exists(cls, job_id):
         return cls.job_exists(job_id, 'models')
@@ -92,6 +107,9 @@ layer {
     def delete_model(cls, job_id):
         return cls.delete_job(job_id, job_type='models')
 
+    @classmethod
+    def network(cls):
+        return cls.TORCH_NETWORK if cls.FRAMEWORK=='torch' else cls.CAFFE_NETWORK
 
 class BaseViewsTestWithDataset(BaseViewsTest,
         digits.dataset.images.classification.test_views.BaseViewsTestWithDataset):
@@ -101,6 +119,10 @@ class BaseViewsTestWithDataset(BaseViewsTest,
 
     # Inherited classes may want to override these attributes
     CROP_SIZE = None
+    TRAIN_EPOCHS = 1
+    SHUFFLE = False
+    LR_POLICY = None
+    LEARNING_RATE = None
 
     @classmethod
     def setUpClass(cls):
@@ -115,7 +137,7 @@ class BaseViewsTestWithDataset(BaseViewsTest,
         super(BaseViewsTestWithDataset, cls).tearDownClass()
 
     @classmethod
-    def create_model(cls, **kwargs):
+    def create_model(cls, network=None, **kwargs):
         """
         Create a model
         Returns the job_id
@@ -124,16 +146,24 @@ class BaseViewsTestWithDataset(BaseViewsTest,
         Keyword arguments:
         **kwargs -- data to be sent with POST request
         """
+        if network is None:
+            network = cls.network()
         data = {
                 'model_name':       'test_model',
                 'dataset':          cls.dataset_id,
                 'method':           'custom',
-                'custom_network':   cls.CAFFE_NETWORK,
+                'custom_network':   network,
                 'batch_size':       10,
-                'train_epochs':     1,
+                'train_epochs':     cls.TRAIN_EPOCHS,
+                'framework' :       cls.FRAMEWORK,
+                'shuffle':          'true' if cls.SHUFFLE else 'false'
                 }
         if cls.CROP_SIZE is not None:
             data['crop_size'] = cls.CROP_SIZE
+        if cls.LR_POLICY is not None:
+            data['lr_policy'] = cls.LR_POLICY
+        if cls.LEARNING_RATE is not None:
+            data['learning_rate'] = cls.LEARNING_RATE
         data.update(kwargs)
 
         request_json = data.pop('json', False)
@@ -151,7 +181,8 @@ class BaseViewsTestWithDataset(BaseViewsTest,
 
         # expect a redirect
         if not 300 <= rv.status_code <= 310:
-            s = BeautifulSoup(rv.data)
+            print 'Status code:', rv.status_code
+            s = BeautifulSoup(rv.data, 'html.parser')
             div = s.select('div.alert-danger')
             if div:
                 raise RuntimeError(div[0])
@@ -175,12 +206,7 @@ class BaseViewsTestWithModel(BaseViewsTestWithDataset):
         cls.model_id = cls.create_model(json=True)
         assert cls.model_wait_completion(cls.model_id) == 'Done', 'create failed'
 
-
-################################################################################
-# Test classes
-################################################################################
-
-class TestViews(BaseViewsTest):
+class BaseTestViews(BaseViewsTest):
     """
     Tests which don't require a dataset or a model
     """
@@ -193,17 +219,22 @@ class TestViews(BaseViewsTest):
         assert not self.model_exists('foo'), "model shouldn't exist"
 
     def test_visualize_network(self):
-        rv = self.app.post('/models/visualize-network',
-                data = {'custom_network': self.CAFFE_NETWORK}
+        rv = self.app.post('/models/visualize-network?framework='+self.FRAMEWORK,
+                data = {'custom_network': self.network()}
                 )
-        s = BeautifulSoup(rv.data)
+        s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
         image = s.select('img')
         assert image is not None, "didn't return an image"
 
+    def test_customize(self):
+        rv = self.app.post('/models/customize?network=lenet&framework='+self.FRAMEWORK)
+        s = BeautifulSoup(rv.data, 'html.parser')
+        body = s.select('body')
+        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
 
-class TestCreation(BaseViewsTestWithDataset):
+class BaseTestCreation(BaseViewsTestWithDataset):
     """
     Model creation tests
     """
@@ -275,6 +306,8 @@ class TestCreation(BaseViewsTestWithDataset):
         gpu_list = config_value('gpu_list').split(',')
         for i in xrange(len(gpu_list)):
             for combination in itertools.combinations(gpu_list, i+1):
+                if self.FRAMEWORK=='torch' and len(combination)>1:
+                    raise unittest.SkipTest('Torch not tested with multi-GPU')
                 yield self.check_select_gpus, combination
 
     def check_select_gpus(self, gpu_list):
@@ -295,11 +328,65 @@ class TestCreation(BaseViewsTestWithDataset):
                 }
         options['%s-snapshot' % job1_id] = content['snapshots'][-1]
 
-        job_id = self.create_model(**options)
-        assert self.model_wait_completion(job1_id) == 'Done', 'second job failed'
+        job2_id = self.create_model(**options)
+        assert self.model_wait_completion(job2_id) == 'Done', 'second job failed'
+
+    def test_retrain_twice(self):
+        # retrain from a job which already had a pretrained model
+        job1_id = self.create_model()
+        assert self.model_wait_completion(job1_id) == 'Done', 'first job failed'
+        rv = self.app.get('/models/%s.json' % job1_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content = json.loads(rv.data)
+        assert len(content['snapshots']), 'should have at least snapshot'
+        options_2 = {
+                'method': 'previous',
+                'previous_networks': job1_id,
+                }
+        options_2['%s-snapshot' % job1_id] = content['snapshots'][-1]
+        job2_id = self.create_model(**options_2)
+        assert self.model_wait_completion(job2_id) == 'Done', 'second job failed'
+        options_3 = {
+                'method': 'previous',
+                'previous_networks': job2_id,
+                }
+        options_3['%s-snapshot' % job2_id] = -1
+        job3_id = self.create_model(**options_3)
+        assert self.model_wait_completion(job3_id) == 'Done', 'third job failed'
+
+    def test_bad_network_definition(self):
+        if self.FRAMEWORK == 'caffe':
+            bogus_net = """
+                layer {
+                    name: "hidden"
+                    type: 'BogusCode'
+                    bottom: "data"
+                    top: "output"
+                }
+                layer {
+                    name: "loss"
+                    type: "SoftmaxWithLoss"
+                    bottom: "output"
+                    bottom: "label"
+                    top: "loss"
+                }
+                """
+        elif self.FRAMEWORK == 'torch':
+            bogus_net = """
+                local model = BogusCode(0)
+                return function(params)
+                    return {
+                        model = model
+                    }
+                end
+                """
+        job_id = self.create_model(json=True, network=bogus_net)
+        assert self.model_wait_completion(job_id) == 'Error', 'job should have failed'
+        job_info = self.job_info_html(job_id=job_id, job_type='models')
+        assert 'BogusCode' in job_info
 
 
-class TestCreated(BaseViewsTestWithModel):
+class BaseTestCreated(BaseViewsTestWithModel):
     """
     Tests on a model that has already been created
     """
@@ -327,6 +414,11 @@ class TestCreated(BaseViewsTestWithModel):
                 break
         assert found, 'model not found in list'
 
+    def test_models_page(self):
+        rv = self.app.get('/models', follow_redirects=True)
+        assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
+        assert 'Models' in rv.data, 'unexpected page format'
+
     def test_model_json(self):
         rv = self.app.get('/models/%s.json' % self.model_id)
         assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
@@ -334,6 +426,20 @@ class TestCreated(BaseViewsTestWithModel):
         assert content['id'] == self.model_id, 'id %s != %s' % (content['id'], self.model_id)
         assert content['dataset_id'] == self.dataset_id, 'dataset_id %s != %s' % (content['dataset_id'], self.dataset_id)
         assert len(content['snapshots']) > 0, 'no snapshots in list'
+
+    def test_edit_name(self):
+        status = self.edit_job(
+                self.dataset_id,
+                name='new name'
+                )
+        assert status == 200, 'failed with %s' % status
+
+    def test_edit_notes(self):
+        status = self.edit_job(
+                self.dataset_id,
+                notes='new notes'
+                )
+        assert status == 200, 'failed with %s' % status
 
     def test_classify_one(self):
         category = self.imageset_paths.keys()[0]
@@ -350,7 +456,7 @@ class TestCreated(BaseViewsTestWithModel):
                     'show_visualizations': 'y',
                     }
                 )
-        s = BeautifulSoup(rv.data)
+        s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
         # gets an array of arrays [[confidence, label],...]
@@ -393,7 +499,7 @@ class TestCreated(BaseViewsTestWithModel):
                 '/models/images/classification/classify_many?job_id=%s' % self.model_id,
                 data = {'image_list': file_upload}
                 )
-        s = BeautifulSoup(rv.data)
+        s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
 
@@ -435,14 +541,14 @@ class TestCreated(BaseViewsTestWithModel):
                 '/models/images/classification/top_n?job_id=%s' % self.model_id,
                 data = {'image_list': file_upload}
                 )
-        s = BeautifulSoup(rv.data)
+        s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
         keys = self.imageset_paths.keys()
         for key in keys:
             assert key in rv.data, '"%s" not found in the response'
 
-class TestDatasetModelInteractions(BaseViewsTestWithDataset):
+class BaseTestDatasetModelInteractions(BaseViewsTestWithDataset):
     """
     Test the interactions between datasets and models
     """
@@ -507,16 +613,16 @@ class TestDatasetModelInteractions(BaseViewsTestWithDataset):
         self.abort_model(model_id)
 
 
-class TestCreatedWide(TestCreated):
+class BaseTestCreatedWide(BaseTestCreated):
     IMAGE_WIDTH = 20
 
-class TestCreatedTall(TestCreated):
+class BaseTestCreatedTall(BaseTestCreated):
     IMAGE_HEIGHT = 20
 
-class TestCreatedCropInForm(TestCreated):
+class BaseTestCreatedCropInForm(BaseTestCreated):
     CROP_SIZE = 8
 
-class TestCreatedCropInNetwork(TestCreated):
+class BaseTestCreatedCropInNetwork(BaseTestCreated):
     CAFFE_NETWORK = \
 """
 layer {
@@ -568,3 +674,76 @@ layer {
 }
 """
 
+################################################################################
+# Test classes
+################################################################################
+
+class TestCaffeViews(BaseTestViews):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeCreation(BaseTestCreation):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeCreated(BaseTestCreated):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeDatasetModelInteractions(BaseTestDatasetModelInteractions):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeCreatedWide(BaseTestCreatedWide):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeCreatedTall(BaseTestCreatedTall):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeCreatedCropInForm(BaseTestCreatedCropInForm):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeCreatedCropInNetwork(BaseTestCreatedCropInNetwork):
+    FRAMEWORK = 'caffe'
+
+class TestTorchViews(BaseTestViews):
+    FRAMEWORK = 'torch'
+
+class TestTorchCreation(BaseTestCreation):
+    FRAMEWORK = 'torch'
+
+class TestTorchCreated(BaseTestCreated):
+    FRAMEWORK = 'torch'
+    TRAIN_EPOCHS = 10
+
+class TestTorchCreatedHdf5(TestTorchCreated):
+    BACKEND = 'hdf5'
+
+class TestTorchDatasetModelInteractions(BaseTestDatasetModelInteractions):
+    FRAMEWORK = 'torch'
+
+class TestCaffeLeNet(TestCaffeCreated):
+    IMAGE_WIDTH = 28
+    IMAGE_HEIGHT = 28
+
+    CAFFE_NETWORK=open(
+            os.path.join(
+                os.path.dirname(digits.__file__),
+                'standard-networks', 'caffe', 'lenet.prototxt')
+            ).read()
+
+class TestTorchLeNet(TestTorchCreated):
+    IMAGE_WIDTH = 28
+    IMAGE_HEIGHT = 28
+    IMAGE_CHANNELS = 1
+    TRAIN_EPOCHS = 20
+    # need more aggressive learning rate
+    # on such a small dataset
+    LR_POLICY = 'fixed'
+    LEARNING_RATE = 0.1
+
+    TORCH_NETWORK=open(
+            os.path.join(
+                os.path.dirname(digits.__file__),
+                'standard-networks', 'torch', 'lenet.lua')
+            ).read()
+
+
+class TestTorchHdf5LeNet(TestTorchLeNet):
+    BACKEND = 'hdf5'

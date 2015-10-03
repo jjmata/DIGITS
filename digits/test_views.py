@@ -78,6 +78,16 @@ class BaseViewsTest(object):
         return info
 
     @classmethod
+    def job_info_html(cls, job_id, job_type='jobs'):
+        """
+        Get job information (full HTML response)
+        """
+        url = '/%s/%s' % (job_type, job_id)
+        rv = cls.app.get(url)
+        assert rv.status_code == 200, 'Cannot get info from job %s. "%s" returned %s' % (job_id, url, rv.status_code)
+        return rv.data
+
+    @classmethod
     def abort_job(cls, job_id, job_type='jobs'):
         """
         Abort a job
@@ -107,6 +117,19 @@ class BaseViewsTest(object):
                 return status
             assert (time.time() - start) < timeout, 'Job took more than %s seconds' % timeout
             time.sleep(polling_period)
+
+    @classmethod
+    def edit_job(cls, job_id, name=None, notes=None):
+        """
+        Edit the name of a job
+        """
+        data = {}
+        if name:
+            data['job_name'] = name
+        if notes:
+            data['job_notes'] = notes
+        rv = cls.app.put('/jobs/%s' % job_id, data=data)
+        return rv.status_code
 
     @classmethod
     def delete_job(cls, job_id, job_type='jobs'):
@@ -143,4 +166,9 @@ class TestViews(BaseViewsTest):
         assert rv.status_code == 200
         status = json.loads(rv.data)
         assert 'suggestions' in status
+
+    def test_models_page(self):
+        rv = self.app.get('/models', follow_redirects=True)
+        assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
+        assert 'Models' in rv.data, 'unexpected page format'
 

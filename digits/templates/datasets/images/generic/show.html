@@ -28,11 +28,32 @@
         <i>?</i>
         {% endif %}
         </dd>
+        {% if task.analyze_db_log_file %}
+        <dt>DB analysis log file</dt>
+        <dd><a href="{{url_for('serve_file', path=task.path(task.analyze_db_log_file, relative=True))}}">{{task.analyze_db_log_file}}</a></dd>
+        {% endif %}
     </dl>
 </div>
 {% endmacro %}
 
 {% block job_content %}
+
+<div class="row">
+    <div class="col-sm-12">
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <h4>Job Information</h4>
+            </div>
+            <div class="panel-body">
+                <dl>
+                    <dt>Dataset size</dt>
+                    <dd>{{job.disk_size_fmt()}}</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% for task in job.analyze_db_tasks() %}
 <div class="row">
     <div class="col-sm-12">

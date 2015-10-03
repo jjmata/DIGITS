@@ -20,7 +20,7 @@ import digits.test_views
 from test_lmdb_creator import create_lmdbs
 
 # May be too short on a slow system
-TIMEOUT_DATASET = 15
+TIMEOUT_DATASET = 20
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -112,7 +112,7 @@ class BaseViewsTestWithImageset(BaseViewsTest):
 
         # expect a redirect
         if not 300 <= rv.status_code <= 310:
-            s = BeautifulSoup(rv.data)
+            s = BeautifulSoup(rv.data, 'html.parser')
             div = s.select('div.alert-danger')
             if div:
                 raise RuntimeError(div[0])
@@ -187,6 +187,10 @@ class TestCreation(BaseViewsTestWithImageset):
         assert self.delete_dataset(job_id) == 200, 'delete failed'
         assert not self.dataset_exists(job_id), 'dataset exists after delete'
 
+    def test_no_force_same_shape(self):
+        job_id = self.create_dataset(force_same_shape=0)
+        assert self.dataset_wait_completion(job_id) == 'Done', 'create failed'
+
 class TestCreated(BaseViewsTestWithDataset):
     """
     Tests on a dataset that has already been created
@@ -207,4 +211,18 @@ class TestCreated(BaseViewsTestWithDataset):
         assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
         content = json.loads(rv.data)
         assert content['id'] == self.dataset_id, 'expected different job_id'
+
+    def test_edit_name(self):
+        status = self.edit_job(
+                self.dataset_id,
+                name='new name'
+                )
+        assert status == 200, 'failed with %s' % status
+
+    def test_edit_notes(self):
+        status = self.edit_job(
+                self.dataset_id,
+                notes='new notes'
+                )
+        assert status == 200, 'failed with %s' % status
 

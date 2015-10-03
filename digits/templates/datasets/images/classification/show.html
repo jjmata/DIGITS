@@ -12,14 +12,22 @@
         <dd>{{ job.dir() }}</dd>
     </dl>
     <dl>
-        <dt>Image Type</dt>
-        <dd>{{'Color' if job.image_dims[2] == 3 else 'Grayscale'}}</dd>
-        <dt>Image Encoding</dt>
-        <dd>{{job.train_db_task().encoding}}</dd>
         <dt>Image Dimensions</dt>
         <dd>{{job.image_dims[1]}}x{{job.image_dims[0]}}</dd>
+        <dt>Image Type</dt>
+        <dd>{{'Color' if job.image_dims[2] == 3 else 'Grayscale'}}</dd>
         <dt>Resize Transformation</dt>
         <dd>{{ job.resize_mode_name() }}</dd>
+        <dt>DB Backend</dt>
+        <dd>{{job.train_db_task().backend}}</dd>
+        <dt>Image Encoding</dt>
+        <dd>{{job.train_db_task().encoding}}</dd>
+        <dt>DB Compression</dt>
+        <dd>{{job.train_db_task().compression}}</dd>
+    </dl>
+    <dl>
+        <dt>Dataset size</dt>
+        <dd>{{job.disk_size_fmt()}}</dd>
     </dl>
 </div>
 {% endmacro %}
@@ -89,7 +97,7 @@
         {% endautoescape %}
         );
     </script>
-    {% if task.mean_file %}
+    {% if task.status=='D' and task.mean_file %}
     <b>Image Mean:</b>
     <img src="{{url_for('serve_file', path=task.path('mean.jpg', relative=True))}}" />
     {% endif %}

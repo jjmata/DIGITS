@@ -2,20 +2,16 @@
 
 import os
 
-from google.protobuf import text_format
 from flask.ext.wtf import Form
 import wtforms
 from wtforms import validators
-try:
-    import caffe_pb2
-except ImportError:
-    # See issue #32
-    from caffe.proto import caffe_pb2
 
 from digits.config import config_value
 from digits.device_query import get_device, get_nvml_info
+from digits import utils
 from digits.utils import sizeof_fmt
 from digits.utils.forms import validate_required_iff
+from digits import frameworks
 
 class ModelForm(Form):
 
@@ -30,70 +26,80 @@ class ModelForm(Form):
             raise validators.ValidationError("Selected job doesn't exist. Maybe it was deleted by another user.")
 
     def validate_NetParameter(form, field):
-        pb = caffe_pb2.NetParameter()
+        fw = frameworks.get_framework_by_id(form['framework'].data)
         try:
-            text_format.Merge(field.data, pb)
-        except text_format.ParseError as e:
-            raise validators.ValidationError('Not a valid NetParameter: %s' % e)
+            # below function raises a BadNetworkException in case of validation error
+            fw.validate_network(field.data)
+        except frameworks.errors.BadNetworkError as e:
+            raise validators.ValidationError('Bad network: %s' % e.message)
 
     ### Fields
 
     # The options for this get set in the view (since they are dynamic)
-    dataset = wtforms.SelectField('Select Dataset', choices=[])
+    dataset = utils.forms.SelectField('Select Dataset', choices=[],
+                tooltip = "Choose the dataset to use for this model."
+            )
 
-    train_epochs = wtforms.IntegerField('Training epochs',
+    train_epochs = utils.forms.IntegerField('Training epochs',
             validators = [
                 validators.NumberRange(min=1)
                 ],
             default=30,
+            tooltip = "How many passes through the training data?"
             )
 
-    snapshot_interval = wtforms.FloatField('Snapshot interval (in epochs)',
+    snapshot_interval = utils.forms.FloatField('Snapshot interval (in epochs)',
             default = 1,
             validators = [
                 validators.NumberRange(min=0),
                 ],
+            tooltip = "How many epochs of training between taking a snapshot?"
             )
 
-    val_interval = wtforms.FloatField('Validation interval (in epochs)',
+    val_interval = utils.forms.FloatField('Validation interval (in epochs)',
             default = 1,
             validators = [
                 validators.NumberRange(min=0)
                 ],
+            tooltip = "How many epochs of training between running through one pass of the validation data?"
             )
 
-    random_seed = wtforms.IntegerField('Random seed',
+    random_seed = utils.forms.IntegerField('Random seed',
             validators = [
                 validators.NumberRange(min=0),
                 validators.Optional(),
                 ],
+            tooltip = "If you provide a random seed, then back-to-back runs with the same model and dataset should give identical results."
             )
 
-    batch_size = wtforms.IntegerField('Batch size',
+    batch_size = utils.forms.IntegerField('Batch size',
             validators = [
                 validators.NumberRange(min=1),
                 validators.Optional(),
                 ],
+            tooltip = "How many images to process at once. If blank, values are used from the network definition."
             )
 
     ### Solver types
 
-    solver_type = wtforms.SelectField('Solver type',
+    solver_type = utils.forms.SelectField('Solver type',
         choices = [
                 ('SGD', 'Stochastic gradient descent (SGD)'),
                 ('ADAGRAD', 'Adaptive gradient (AdaGrad)'),
                 ('NESTEROV', "Nesterov's accelerated gradient (NAG)"),
                 ],
-            default = 'SGD'
+            default = 'SGD',
+            tooltip = "What type of solver will be used??"
             )
 
     ### Learning rate
 
-    learning_rate = wtforms.FloatField('Base Learning Rate',
+    learning_rate = utils.forms.FloatField('Base Learning Rate',
             default = 0.01,
             validators = [
                 validators.NumberRange(min=0),
-                ]
+                ],
+            tooltip = "Affects how quickly the network learns. If you are getting NaN for your loss, you probably need to lower this value."
             )
 
     lr_policy = wtforms.SelectField('Policy',
@@ -160,6 +166,17 @@ class ModelForm(Form):
             default='standard',
             )
 
+    ## framework - hidden field, set by Javascript to the selected framework ID
+    framework = wtforms.HiddenField('framework',
+            validators = [
+                validators.AnyOf(
+                    [fw.get_id() for fw in frameworks.get_frameworks()],
+                    message='The framework you choose is not currently supported.'
+                    )
+                ],
+            default = frameworks.get_frameworks()[0].get_id()
+            )
+
     # The options for this get set in the view (since they are dependent on the data type)
     standard_networks = wtforms.RadioField('Standard Networks',
             validators = [
@@ -175,14 +192,17 @@ class ModelForm(Form):
                 ],
             )
 
-    custom_network = wtforms.TextAreaField('Custom Network',
+    custom_network = utils.forms.TextAreaField('Custom Network',
             validators = [
                 validate_required_iff(method='custom'),
                 validate_NetParameter,
-                ]
+                ],
             )
 
-    custom_network_snapshot = wtforms.TextField('Pretrained model')
+    custom_network_snapshot = utils.forms.TextField('Pretrained model',
+                tooltip = "Path to pretrained model file. Only edit this field if you understand how fine-tuning works in caffe"
+            )
+
 
     def validate_custom_network_snapshot(form, field):
         if form.method.data == 'custom':
@@ -206,7 +226,7 @@ class ModelForm(Form):
             )
 
     # Select N of several GPUs
-    select_gpus = wtforms.SelectMultipleField('Select which GPU[s] you would like to use',
+    select_gpus = utils.forms.SelectMultipleField('Select which GPU[s] you would like to use',
             choices = [(
                 index,
                 '#%s - %s%s' % (
@@ -215,7 +235,8 @@ class ModelForm(Form):
                     ' (%s memory)' % sizeof_fmt(get_nvml_info(index)['memory']['total'])
                         if get_nvml_info(index) and 'memory' in get_nvml_info(index) else '',
                     ),
-                ) for index in config_value('gpu_list').split(',') if index]
+                ) for index in config_value('gpu_list').split(',') if index],
+            tooltip = "The job won't start until all of the chosen GPUs are available."
             )
 
     # XXX For testing
@@ -241,9 +262,17 @@ class ModelForm(Form):
                 field.errors[:] = []
                 raise validators.StopValidation()
 
-    model_name = wtforms.StringField('Model Name',
+    model_name = utils.forms.StringField('Model Name',
             validators = [
                 validators.DataRequired()
-                ]
+                ],
+            tooltip = "An identifier, later used to refer to this model in the Application."
+            )
+
+    # allows shuffling data during training (for frameworks that support this, as indicated by
+    # their Framework.can_shuffle_data() method)
+    shuffle = utils.forms.BooleanField('Shuffle Train Data',
+                                       default = True,
+                                       tooltip = 'For every epoch, shuffle the data before training.'
             )
 

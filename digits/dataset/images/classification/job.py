@@ -3,6 +3,7 @@
 from digits.utils import subclass, override
 from digits.status import Status
 from ..job import ImageDatasetJob
+from digits.dataset import tasks
 
 # NOTE: Increment this everytime the pickled object changes
 PICKLE_VERSION = 2
@@ -29,12 +30,8 @@ class ImageClassificationDatasetJob(ImageDatasetJob):
                 if task.encoding == "jpg":
                     if task.mean_file.endswith('.binaryproto'):
                         print '\tConverting mean file "%s" from RGB to BGR.' % task.path(task.mean_file)
-                        try:
-                            import caffe_pb2
-                        except ImportError:
-                            # See issue #32
-                            from caffe.proto import caffe_pb2
                         import numpy as np
+                        import caffe_pb2
 
                         old_blob = caffe_pb2.BlobProto()
                         with open(task.path(task.mean_file),'rb') as infile:
@@ -62,4 +59,14 @@ class ImageClassificationDatasetJob(ImageDatasetJob):
     @override
     def job_type(self):
         return 'Image Classification Dataset'
+
+    @override
+    def train_db_task(self):
+        """
+        Return the task that creates the training set
+        """
+        for t in self.tasks:
+            if isinstance(t, tasks.CreateDbTask) and 'train' in t.name().lower():
+                return t
+        return None
 

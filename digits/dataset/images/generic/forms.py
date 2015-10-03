@@ -7,6 +7,7 @@ from wtforms import validators
 
 from ..forms import ImageDatasetForm
 from digits.utils.forms import validate_required_iff
+from digits import utils
 
 class GenericImageDatasetForm(ImageDatasetForm):
     """
@@ -62,9 +63,24 @@ class GenericImageDatasetForm(ImageDatasetForm):
                 ]
             )
 
-    prebuilt_mean_file = wtforms.StringField('Mean Image',
+    # Can't use a BooleanField here because HTML doesn't submit anything
+    # for an unchecked checkbox. Since we want to use a REST API and have
+    # this default to True when nothing is supplied, we have to use a
+    # SelectField
+    force_same_shape = utils.forms.SelectField('Enforce same shape',
+            choices = [
+                (1, 'Yes'),
+                (0, 'No'),
+                ],
+            coerce = int,
+            default = 1,
+            tooltip = 'Check that each entry in the database has the same shape (can be time-consuming)'
+            )
+
+    prebuilt_mean_file = utils.forms.StringField('Mean Image',
             validators=[
                 validate_file_path,
-                ]
+                ],
+            tooltip = "Path to a .binaryproto file on the server"
             )
 

@@ -6,13 +6,8 @@ import tempfile
 
 import flask
 import werkzeug.exceptions
-from google.protobuf import text_format
-try:
-    import caffe_pb2
-except ImportError:
-    # See issue #32
-    from caffe.proto import caffe_pb2
 
+from digits import frameworks
 from digits.config import config_value
 from digits import utils
 from digits.utils.routing import request_wants_json, job_from_request
@@ -42,6 +37,7 @@ def generic_image_model_new():
     return flask.render_template('models/images/generic/new.html',
             form = form,
             previous_network_snapshots = prev_network_snapshots,
+            previous_networks_fullinfo = get_previous_networks_fulldetails(),
             multi_gpu = config_value('caffe_root')['multi_gpu'],
             )
 
@@ -68,6 +64,7 @@ def generic_image_model_create():
             return flask.render_template('models/images/generic/new.html',
                     form = form,
                     previous_network_snapshots = prev_network_snapshots,
+                    previous_networks_fullinfo = get_previous_networks_fulldetails(),
                     multi_gpu = config_value('caffe_root')['multi_gpu'],
                     ), 400
 
@@ -83,7 +80,9 @@ def generic_image_model_create():
                 dataset_id  = datasetJob.id(),
                 )
 
-        network = caffe_pb2.NetParameter()
+        # get framework (hard-coded to caffe for now)
+        fw = frameworks.get_framework_by_id('caffe')
+
         pretrained_model = None
         #if form.method.data == 'standard':
         if form.method.data == 'previous':
@@ -92,17 +91,16 @@ def generic_image_model_create():
                 raise werkzeug.exceptions.BadRequest(
                         'Job not found: %s' % form.previous_networks.data)
 
-            network.CopyFrom(old_job.train_task().network)
-            # Rename the final layer
-            # XXX making some assumptions about network architecture here
-            ip_layers = [l for l in network.layer if l.type == 'InnerProduct']
-            if len(ip_layers) > 0:
-                ip_layers[-1].name = '%s_retrain' % ip_layers[-1].name
+            network = fw.get_network_from_previous(old_job.train_task().network)
 
             for choice in form.previous_networks.choices:
                 if choice[0] == form.previous_networks.data:
                     epoch = float(flask.request.form['%s-snapshot' % form.previous_networks.data])
-                    if epoch != 0:
+                    if epoch == 0:
+                        pass
+                    elif epoch == -1:
+                        pretrained_model = old_job.train_task().pretrained_model
+                    else:
                         for filename, e in old_job.train_task().snapshots:
                             if e == epoch:
                                 pretrained_model = filename
@@ -118,7 +116,7 @@ def generic_image_model_create():
                     break
 
         elif form.method.data == 'custom':
-            text_format.Merge(form.custom_network.data, network)
+            network = fw.get_network_from_desc(form.custom_network.data)
             pretrained_model = form.custom_network_snapshot.data.strip()
         else:
             raise werkzeug.exceptions.BadRequest(
@@ -162,8 +160,7 @@ def generic_image_model_create():
                 selected_gpus = [str(form.select_gpu.data)]
                 gpu_count = None
 
-        job.tasks.append(
-                tasks.CaffeTrainTask(
+        job.tasks.append(fw.create_train_task(
                     job_dir         = job.dir(),
                     dataset         = datasetJob,
                     train_epochs    = form.train_epochs.data,
@@ -257,6 +254,7 @@ def generic_image_model_infer_one():
         return flask.jsonify({'outputs': dict((name, blob.tolist()) for name,blob in outputs.iteritems())})
     else:
         return flask.render_template('models/images/generic/infer_one.html',
+                job             = job,
                 image_src       = utils.image.embed_image_html(image),
                 network_outputs = outputs,
                 visualizations  = visualizations,
@@ -330,6 +328,7 @@ def generic_image_model_infer_many():
         return flask.jsonify({'outputs': result})
     else:
         return flask.render_template('models/images/generic/infer_many.html',
+                job             = job,
                 paths           = paths,
                 network_outputs = outputs,
                 )
@@ -348,12 +347,21 @@ def get_previous_networks():
         )
         ]
 
+def get_previous_networks_fulldetails():
+    return [(j) for j in sorted(
+        [j for j in scheduler.jobs if isinstance(j, GenericImageModelJob)],
+        cmp=lambda x,y: cmp(y.id(), x.id())
+        )
+        ]
+
 def get_previous_network_snapshots():
     prev_network_snapshots = []
     for job_id, _ in get_previous_networks():
         job = scheduler.get_job(job_id)
         e = [(0, 'None')] + [(epoch, 'Epoch #%s' % epoch)
                 for _, epoch in reversed(job.train_task().snapshots)]
+        if job.train_task().pretrained_model:
+            e.insert(0, (-1, 'Previous pretrained model'))
         prev_network_snapshots.append(e)
     return prev_network_snapshots
 

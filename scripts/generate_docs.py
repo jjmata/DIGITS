@@ -148,7 +148,7 @@ class DocGenerator(object):
                     args[-1] = '%s (`%s`)' % (args[-1], route['defaults'][arg])
             self.w('Arguments: ' + ', '.join(args))
             self.w()
-        if 'location' in route:
+        if 'location' in route and route['location']:
             # get location relative to digits root
             digits_root = os.path.dirname(
                     os.path.dirname(
@@ -158,9 +158,9 @@ class DocGenerator(object):
             filename = os.path.normpath(route['location']['filename'])
             if filename.startswith(digits_root):
                 filename = os.path.relpath(filename, digits_root).replace("\\","/")
-                self.w('Location: [`%s@%s`](%s#L%s)' % (
-                    filename, route['location']['line'],
-                    os.path.join('..', filename).replace("\\","/"), route['location']['line'],
+                self.w('Location: [`%s`](%s)' % (
+                    filename,
+                    os.path.join('..', filename).replace("\\","/"),
                     ))
                 self.w()
 

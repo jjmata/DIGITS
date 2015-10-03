@@ -20,7 +20,7 @@ import digits.test_views
 from test_imageset_creator import create_classification_imageset, IMAGE_SIZE as DUMMY_IMAGE_SIZE, IMAGE_COUNT as DUMMY_IMAGE_COUNT
 
 # May be too short on a slow system
-TIMEOUT_DATASET = 15
+TIMEOUT_DATASET = 20
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -65,6 +65,8 @@ class BaseViewsTestWithImageset(BaseViewsTest):
     IMAGE_HEIGHT    = 10
     IMAGE_WIDTH     = 10
     IMAGE_CHANNELS  = 3
+    BACKEND         = 'lmdb'
+    COMPRESSION     = 'none'
 
     UNBALANCED_CATEGORY = False
 
@@ -103,6 +105,8 @@ class BaseViewsTestWithImageset(BaseViewsTest):
                 'resize_channels':  cls.IMAGE_CHANNELS,
                 'resize_width':     cls.IMAGE_WIDTH,
                 'resize_height':    cls.IMAGE_HEIGHT,
+                'backend':          cls.BACKEND,
+                'compression':      cls.COMPRESSION,
                 }
         data.update(kwargs)
 
@@ -121,7 +125,7 @@ class BaseViewsTestWithImageset(BaseViewsTest):
 
         # expect a redirect
         if not 300 <= rv.status_code <= 310:
-            s = BeautifulSoup(rv.data)
+            s = BeautifulSoup(rv.data, 'html.parser')
             div = s.select('div.alert-danger')
             if div:
                 raise RuntimeError(div[0])
@@ -409,6 +413,25 @@ class TestCreated(BaseViewsTestWithDataset):
         pil_image = PIL.Image.open(buff)
         assert pil_image.size == (self.IMAGE_WIDTH, self.IMAGE_HEIGHT), 'image size is %s' % (pil_image.size,)
 
+    def test_edit_name(self):
+        status = self.edit_job(
+                self.dataset_id,
+                name='new name'
+                )
+        assert status == 200, 'failed with %s' % status
+
+    def test_edit_notes(self):
+        status = self.edit_job(
+                self.dataset_id,
+                notes='new notes'
+                )
+        assert status == 200, 'failed with %s' % status
+
+    def test_backend_selection(self):
+        rv = self.app.get('/datasets/%s.json' % self.dataset_id)
+        content = json.loads(rv.data)
+        for task in content['CreateDbTasks']:
+            assert task['backend'] == self.BACKEND
 
 class TestCreatedGrayscale(TestCreated):
     IMAGE_CHANNELS = 1
@@ -418,4 +441,17 @@ class TestCreatedWide(TestCreated):
 
 class TestCreatedTall(TestCreated):
     IMAGE_HEIGHT = 20
+
+class TestCreatedHdf5(TestCreated):
+    BACKEND = 'hdf5'
+
+    def test_compression_method(self):
+        rv = self.app.get('/datasets/%s.json' % self.dataset_id)
+        content = json.loads(rv.data)
+        for task in content['CreateDbTasks']:
+            assert task['compression'] == self.COMPRESSION
+
+class TestCreatedHdf5Gzip(TestCreatedHdf5):
+    COMPRESSION = 'gzip'
+
 

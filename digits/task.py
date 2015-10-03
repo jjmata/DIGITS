@@ -43,7 +43,6 @@ class Task(StatusCls):
         else:
             raise TypeError('parents is %s' % type(parents))
 
-        self.progress = 0
         self.exception = None
         self.traceback = None
         self.aborted = gevent.event.Event()
@@ -76,6 +75,12 @@ class Task(StatusCls):
         Returns a string
         """
         raise NotImplementedError
+
+    def get_framework_id(self):
+        """
+        Returns a string
+        """
+        raise NotImplementedError('Please implement me')
 
     def html_id(self):
         """
@@ -152,13 +157,14 @@ class Task(StatusCls):
         """
         raise NotImplementedError
 
-    def task_arguments(self, resources):
+    def task_arguments(self, resources, env):
         """
         Returns args used by subprocess.Popen to execute the task
         Returns False if the args cannot be set properly
 
         Arguments:
         resources -- the resources assigned by the scheduler for this task
+        environ   -- os.environ instance to run process in
         """
         raise NotImplementedError
 
@@ -178,7 +184,8 @@ class Task(StatusCls):
         """
         self.before_run()
 
-        args = self.task_arguments(resources)
+        env = os.environ.copy()
+        args = self.task_arguments(resources, env )
         if not args:
             self.logger.error('Could not create the arguments for Popen')
             self.status = Status.ERROR
@@ -196,6 +203,7 @@ class Task(StatusCls):
                 stderr=subprocess.STDOUT,
                 cwd=self.job_dir,
                 close_fds=False if platform.system() == 'Windows' else True,
+                env=env,
                 )
 
         try:
@@ -239,7 +247,10 @@ class Task(StatusCls):
             if self.exception is None:
                 self.exception = 'error code %d' % p.returncode
                 if unrecognized_output:
-                    self.traceback = '\n'.join(unrecognized_output)
+                    if self.traceback is None:
+                        self.traceback = '\n'.join(unrecognized_output)
+                    else:
+                        self.traceback = self.traceback + ('\n'.join(unrecognized_output))
             self.after_runtime_error()
             self.status = Status.ERROR
             return False

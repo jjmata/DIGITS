@@ -1,6 +1,6 @@
 # REST API
 
-*Generated Aug 17, 2015*
+*Generated Sep 16, 2015*
 
 DIGITS exposes its internal functionality through a REST API. You can access these endpoints by performing a GET or POST on the route, and a JSON object will be returned.
 
@@ -20,7 +20,7 @@ Methods: **GET**
 
 Arguments: `job_id`
 
-Location: [`digits/dataset/views.py@15`](../digits/dataset/views.py#L15)
+Location: [`digits/dataset/views.py`](../digits/dataset/views.py)
 
 ### `/datasets/images/classification.json`
 
@@ -32,7 +32,7 @@ Location: [`digits/dataset/views.py@15`](../digits/dataset/views.py#L15)
 
 Methods: **POST**
 
-Location: [`digits/dataset/images/classification/views.py@245`](../digits/dataset/images/classification/views.py#L245)
+Location: [`digits/dataset/images/classification/views.py`](../digits/dataset/images/classification/views.py)
 
 ### `/datasets/images/generic.json`
 
@@ -44,7 +44,7 @@ Location: [`digits/dataset/images/classification/views.py@245`](../digits/datase
 
 Methods: **POST**
 
-Location: [`digits/dataset/images/generic/views.py@24`](../digits/dataset/images/generic/views.py#L24)
+Location: [`digits/dataset/images/generic/views.py`](../digits/dataset/images/generic/views.py)
 
 ### `/index.json`
 
@@ -66,7 +66,7 @@ Location: [`digits/dataset/images/generic/views.py@24`](../digits/dataset/images
 
 Methods: **GET**
 
-Location: [`digits/views.py@22`](../digits/views.py#L22)
+Location: [`digits/views.py`](../digits/views.py)
 
 ### `/models/<job_id>.json`
 
@@ -82,7 +82,7 @@ Methods: **GET**
 
 Arguments: `job_id`
 
-Location: [`digits/model/views.py@31`](../digits/model/views.py#L31)
+Location: [`digits/model/views.py`](../digits/model/views.py)
 
 ### `/models/images/classification.json`
 
@@ -94,7 +94,7 @@ Location: [`digits/model/views.py@31`](../digits/model/views.py#L31)
 
 Methods: **POST**
 
-Location: [`digits/model/images/classification/views.py@54`](../digits/model/images/classification/views.py#L54)
+Location: [`digits/model/images/classification/views.py`](../digits/model/images/classification/views.py)
 
 ### `/models/images/classification/classify_many.json`
 
@@ -106,7 +106,7 @@ Location: [`digits/model/images/classification/views.py@54`](../digits/model/ima
 
 Methods: **POST**
 
-Location: [`digits/model/images/classification/views.py@294`](../digits/model/images/classification/views.py#L294)
+Location: [`digits/model/images/classification/views.py`](../digits/model/images/classification/views.py)
 
 ### `/models/images/classification/classify_one.json`
 
@@ -118,7 +118,7 @@ Location: [`digits/model/images/classification/views.py@294`](../digits/model/im
 
 Methods: **POST**
 
-Location: [`digits/model/images/classification/views.py@237`](../digits/model/images/classification/views.py#L237)
+Location: [`digits/model/images/classification/views.py`](../digits/model/images/classification/views.py)
 
 ### `/models/images/generic.json`
 
@@ -130,7 +130,7 @@ Location: [`digits/model/images/classification/views.py@237`](../digits/model/im
 
 Methods: **POST**
 
-Location: [`digits/model/images/generic/views.py@50`](../digits/model/images/generic/views.py#L50)
+Location: [`digits/model/images/generic/views.py`](../digits/model/images/generic/views.py)
 
 ### `/models/images/generic/infer_many.json`
 
@@ -138,7 +138,7 @@ Location: [`digits/model/images/generic/views.py@50`](../digits/model/images/gen
 
 Methods: **POST**
 
-Location: [`digits/model/images/generic/views.py@268`](../digits/model/images/generic/views.py#L268)
+Location: [`digits/model/images/generic/views.py`](../digits/model/images/generic/views.py)
 
 ### `/models/images/generic/infer_one.json`
 
@@ -146,5 +146,5 @@ Location: [`digits/model/images/generic/views.py@268`](../digits/model/images/ge
 
 Methods: **POST**
 
-Location: [`digits/model/images/generic/views.py@215`](../digits/model/images/generic/views.py#L215)
+Location: [`digits/model/images/generic/views.py`](../digits/model/images/generic/views.py)
 

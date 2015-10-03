@@ -18,12 +18,7 @@ from bs4 import BeautifulSoup
 import PIL.Image
 from urlparse import urlparse
 from cStringIO import StringIO
-
-try:
-    import caffe_pb2
-except ImportError:
-    # See issue #32
-    from caffe.proto import caffe_pb2
+import caffe_pb2
 
 import digits.webapp
 import digits.test_views
@@ -31,8 +26,8 @@ import digits.dataset.images.generic.test_views
 from digits.config import config_value
 
 # May be too short on a slow system
-TIMEOUT_DATASET = 15
-TIMEOUT_MODEL = 20
+TIMEOUT_DATASET = 20
+TIMEOUT_MODEL = 30
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -71,6 +66,18 @@ layer {
 }
 """
 
+    TORCH_NETWORK = \
+"""
+require 'nn'
+require 'cunn'
+local model = nn.Sequential()
+model:add(nn.View(-1):setNumInputDims(3)) -- 10*10*3 -> 300
+model:add(nn.Linear(300, 3))
+model:add(nn.LogSoftMax())
+model:cuda()
+return model
+"""
+
     @classmethod
     def model_exists(cls, job_id):
         return cls.job_exists(job_id, 'models')
@@ -93,6 +100,10 @@ layer {
     @classmethod
     def delete_model(cls, job_id):
         return cls.delete_job(job_id, job_type='models')
+
+    @classmethod
+    def network(cls):
+        return cls.TORCH_NETWORK if cls.FRAMEWORK=='torch' else cls.CAFFE_NETWORK
 
 
 class BaseViewsTestWithDataset(BaseViewsTest,
@@ -130,9 +141,10 @@ class BaseViewsTestWithDataset(BaseViewsTest,
                 'model_name':       'test_model',
                 'dataset':          cls.dataset_id,
                 'method':           'custom',
-                'custom_network':   cls.CAFFE_NETWORK,
+                'custom_network':   cls.network(),
                 'batch_size':       10,
                 'train_epochs':     3,
+                'framework':        cls.FRAMEWORK,
                 }
         if cls.CROP_SIZE is not None:
             data['crop_size'] = cls.CROP_SIZE
@@ -153,7 +165,8 @@ class BaseViewsTestWithDataset(BaseViewsTest,
 
         # expect a redirect
         if not 300 <= rv.status_code <= 310:
-            s = BeautifulSoup(rv.data)
+            print 'Status code:', rv.status_code
+            s = BeautifulSoup(rv.data, 'html.parser')
             div = s.select('div.alert-danger')
             if div:
                 raise RuntimeError(div[0])
@@ -177,12 +190,7 @@ class BaseViewsTestWithModel(BaseViewsTestWithDataset):
         cls.model_id = cls.create_model(json=True)
         assert cls.model_wait_completion(cls.model_id) == 'Done', 'create failed'
 
-
-################################################################################
-# Test classes
-################################################################################
-
-class TestViews(BaseViewsTest):
+class BaseTestViews(BaseViewsTest):
     """
     Tests which don't require a dataset or a model
     """
@@ -195,17 +203,17 @@ class TestViews(BaseViewsTest):
         assert not self.model_exists('foo'), "model shouldn't exist"
 
     def test_visualize_network(self):
-        rv = self.app.post('/models/visualize-network',
-                data = {'custom_network': self.CAFFE_NETWORK}
+        rv = self.app.post('/models/visualize-network?framework='+self.FRAMEWORK,
+                data = {'custom_network': self.network()}
                 )
-        s = BeautifulSoup(rv.data)
+        s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
         image = s.select('img')
         assert image is not None, "didn't return an image"
 
 
-class TestCreation(BaseViewsTestWithDataset):
+class BaseTestCreation(BaseViewsTestWithDataset):
     """
     Model creation tests
     """
@@ -297,11 +305,34 @@ class TestCreation(BaseViewsTestWithDataset):
                 }
         options['%s-snapshot' % job1_id] = content['snapshots'][-1]
 
-        job_id = self.create_model(**options)
-        assert self.model_wait_completion(job1_id) == 'Done', 'second job failed'
+        job2_id = self.create_model(**options)
+        assert self.model_wait_completion(job2_id) == 'Done', 'second job failed'
+
+    def test_retrain_twice(self):
+        # retrain from a job which already had a pretrained model
+        job1_id = self.create_model()
+        assert self.model_wait_completion(job1_id) == 'Done', 'first job failed'
+        rv = self.app.get('/models/%s.json' % job1_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content = json.loads(rv.data)
+        assert len(content['snapshots']), 'should have at least snapshot'
+        options_2 = {
+                'method': 'previous',
+                'previous_networks': job1_id,
+                }
+        options_2['%s-snapshot' % job1_id] = content['snapshots'][-1]
+        job2_id = self.create_model(**options_2)
+        assert self.model_wait_completion(job2_id) == 'Done', 'second job failed'
+        options_3 = {
+                'method': 'previous',
+                'previous_networks': job2_id,
+                }
+        options_3['%s-snapshot' % job2_id] = -1
+        job3_id = self.create_model(**options_3)
+        assert self.model_wait_completion(job3_id) == 'Done', 'third job failed'
 
 
-class TestCreated(BaseViewsTestWithModel):
+class BaseTestCreated(BaseViewsTestWithModel):
     """
     Tests on a model that has already been created
     """
@@ -329,12 +360,31 @@ class TestCreated(BaseViewsTestWithModel):
                 break
         assert found, 'model not found in list'
 
+    def test_models_page(self):
+        rv = self.app.get('/models', follow_redirects=True)
+        assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
+        assert 'Models' in rv.data, 'unexpected page format'
+
     def test_model_json(self):
         rv = self.app.get('/models/%s.json' % self.model_id)
         assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
         content = json.loads(rv.data)
         assert content['id'] == self.model_id, 'expected different job_id'
         assert len(content['snapshots']) > 0, 'no snapshots in list'
+
+    def test_edit_name(self):
+        status = self.edit_job(
+                self.dataset_id,
+                name='new name'
+                )
+        assert status == 200, 'failed with %s' % status
+
+    def test_edit_notes(self):
+        status = self.edit_job(
+                self.dataset_id,
+                notes='new notes'
+                )
+        assert status == 200, 'failed with %s' % status
 
     def test_infer_one(self):
         image_path = os.path.join(self.imageset_folder, self.test_image)
@@ -349,7 +399,7 @@ class TestCreated(BaseViewsTestWithModel):
                     'show_visualizations': 'y',
                     }
                 )
-        s = BeautifulSoup(rv.data)
+        s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
 
@@ -381,7 +431,7 @@ class TestCreated(BaseViewsTestWithModel):
                 '/models/images/generic/infer_many?job_id=%s' % self.model_id,
                 data = {'image_list': file_upload}
                 )
-        s = BeautifulSoup(rv.data)
+        s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
         headers = s.select('table.table th')
@@ -402,7 +452,7 @@ class TestCreated(BaseViewsTestWithModel):
         assert 'outputs' in data, 'invalid response'
 
 
-class TestDatasetModelInteractions(BaseViewsTestWithDataset):
+class BaseTestDatasetModelInteractions(BaseViewsTestWithDataset):
     """
     Test the interactions between datasets and models
     """
@@ -467,7 +517,7 @@ class TestDatasetModelInteractions(BaseViewsTestWithDataset):
         self.abort_model(model_id)
 
 
-class TestCreatedCropInNetwork(TestCreated):
+class BaseTestCreatedCropInNetwork(BaseTestCreated):
     CAFFE_NETWORK = \
 """
 layer {
@@ -519,6 +569,29 @@ layer {
 }
 """
 
-class TestCreatedCropInForm(TestCreated):
+class BaseTestCreatedCropInForm(BaseTestCreated):
     CROP_SIZE = 8
+
+################################################################################
+# Test classes
+################################################################################
+
+class TestCaffeViews(BaseTestViews):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeCreation(BaseTestCreation):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeCreated(BaseTestCreated):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeDatasetModelInteractions(BaseTestDatasetModelInteractions):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeCreatedCropInNetwork(BaseTestCreatedCropInNetwork):
+    FRAMEWORK = 'caffe'
+
+class TestCaffeCreatedCropInForm(BaseTestCreatedCropInForm):
+    FRAMEWORK = 'caffe'
+
 

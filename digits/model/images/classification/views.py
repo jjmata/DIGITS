@@ -272,10 +272,7 @@ def image_classification_model_classify_one():
         layers = 'all'
 
     predictions, visualizations = None, None
-    try:
-        predictions, visualizations = job.train_task().infer_one(image, snapshot_epoch=epoch, layers=layers)
-    except frameworks.errors.InferenceError as e:
-        return e.__str__(), 403
+    predictions, visualizations = job.train_task().infer_one(image, snapshot_epoch=epoch, layers=layers)
 
     # take top 5
     if predictions:
@@ -364,7 +361,7 @@ def image_classification_model_classify_many():
         classifications.append(result)
 
     # replace ground truth indices with labels
-    ground_truths = [labels[x] if x is not None else None for x in ground_truths]
+    ground_truths = [labels[x] if x is not None and (0 <= x < len(labels)) else None for x in ground_truths]
 
     if request_wants_json():
         joined = dict(zip(paths, classifications))

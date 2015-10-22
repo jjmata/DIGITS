@@ -26,8 +26,8 @@ import digits.dataset.images.generic.test_views
 from digits.config import config_value
 
 # May be too short on a slow system
-TIMEOUT_DATASET = 20
-TIMEOUT_MODEL = 30
+TIMEOUT_DATASET = 45
+TIMEOUT_MODEL = 60
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -69,14 +69,22 @@ layer {
     TORCH_NETWORK = \
 """
 require 'nn'
-require 'cunn'
-local model = nn.Sequential()
-model:add(nn.View(-1):setNumInputDims(3)) -- 10*10*3 -> 300
-model:add(nn.Linear(300, 3))
-model:add(nn.LogSoftMax())
-model:cuda()
-return model
+local net = nn.Sequential()
+net:add(nn.MulConstant(0.004))
+net:add(nn.View(-1):setNumInputDims(3))  -- 1*10*10 -> 100
+net:add(nn.Linear(100,2))
+return function(params)
+    return {
+        model = net,
+        loss = nn.MSECriterion(),
+    }
+end
 """
+    @classmethod
+    def setUpClass(cls):
+        super(BaseViewsTest, cls).setUpClass()
+        if cls.FRAMEWORK=='torch' and not config_value('torch_root'):
+            raise unittest.SkipTest('Torch not found')
 
     @classmethod
     def model_exists(cls, job_id):
@@ -114,6 +122,9 @@ class BaseViewsTestWithDataset(BaseViewsTest,
 
     # Inherited classes may want to override these attributes
     CROP_SIZE = None
+    TRAIN_EPOCHS = 3
+    LR_POLICY = None
+    LEARNING_RATE = None
 
     @classmethod
     def setUpClass(cls):
@@ -128,7 +139,7 @@ class BaseViewsTestWithDataset(BaseViewsTest,
         super(BaseViewsTestWithDataset, cls).tearDownClass()
 
     @classmethod
-    def create_model(cls, **kwargs):
+    def create_model(cls, learning_rate=None, **kwargs):
         """
         Create a model
         Returns the job_id
@@ -137,17 +148,24 @@ class BaseViewsTestWithDataset(BaseViewsTest,
         Keyword arguments:
         **kwargs -- data to be sent with POST request
         """
+        if learning_rate is None:
+            learning_rate = cls.LEARNING_RATE
         data = {
                 'model_name':       'test_model',
                 'dataset':          cls.dataset_id,
                 'method':           'custom',
                 'custom_network':   cls.network(),
                 'batch_size':       10,
-                'train_epochs':     3,
+                'train_epochs':     cls.TRAIN_EPOCHS,
+                'random_seed':      0xCAFEBABE,
                 'framework':        cls.FRAMEWORK,
                 }
         if cls.CROP_SIZE is not None:
             data['crop_size'] = cls.CROP_SIZE
+        if cls.LR_POLICY is not None:
+            data['lr_policy'] = cls.LR_POLICY
+        if learning_rate is not None:
+            data['learning_rate'] = learning_rate
         data.update(kwargs)
 
         request_json = data.pop('json', False)
@@ -208,7 +226,11 @@ class BaseTestViews(BaseViewsTest):
                 )
         s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
-        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
+        if rv.status_code != 200:
+            body = s.select('body')[0]
+            if 'InvocationException' in str(body):
+                raise unittest.SkipTest('GraphViz not installed')
+            raise AssertionError('POST failed with %s\n\n%s' % (rv.status_code, body))
         image = s.select('img')
         assert image is not None, "didn't return an image"
 
@@ -331,6 +353,13 @@ class BaseTestCreation(BaseViewsTestWithDataset):
         job3_id = self.create_model(**options_3)
         assert self.model_wait_completion(job3_id) == 'Done', 'third job failed'
 
+    def test_diverging_network(self):
+        if self.FRAMEWORK == 'caffe':
+            raise unittest.SkipTest('Test not implemented for Caffe')
+        job_id = self.create_model(json=True, learning_rate=1e15)
+        assert self.model_wait_completion(job_id) == 'Error', 'job should have failed'
+        job_info = self.job_info_html(job_id=job_id, job_type='models')
+        assert 'Try decreasing your learning rate' in job_info
 
 class BaseTestCreated(BaseViewsTestWithModel):
     """
@@ -594,4 +623,16 @@ class TestCaffeCreatedCropInNetwork(BaseTestCreatedCropInNetwork):
 class TestCaffeCreatedCropInForm(BaseTestCreatedCropInForm):
     FRAMEWORK = 'caffe'
 
+class TestTorchViews(BaseTestViews):
+    FRAMEWORK = 'torch'
 
+class TestTorchCreation(BaseTestCreation):
+    FRAMEWORK = 'torch'
+
+class TestTorchCreated(BaseTestCreated):
+    LR_POLICY = 'fixed'
+    TRAIN_EPOCHS = 10
+    FRAMEWORK = 'torch'
+
+class TestTorchDatasetModelInteractions(BaseTestDatasetModelInteractions):
+    FRAMEWORK = 'torch'

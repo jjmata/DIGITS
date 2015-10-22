@@ -20,7 +20,7 @@ import digits.test_views
 from test_imageset_creator import create_classification_imageset, IMAGE_SIZE as DUMMY_IMAGE_SIZE, IMAGE_COUNT as DUMMY_IMAGE_COUNT
 
 # May be too short on a slow system
-TIMEOUT_DATASET = 20
+TIMEOUT_DATASET = 45
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -433,6 +433,37 @@ class TestCreated(BaseViewsTestWithDataset):
         for task in content['CreateDbTasks']:
             assert task['backend'] == self.BACKEND
 
+class TestCreatedLMDBExplore(TestCreated):
+    def test_explore_train(self):
+        rv = self.app.get('/datasets/images/classification/explore?job_id=%s&db=train' % self.dataset_id)
+        assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
+        assert 'Items per page' in rv.data, 'unexpected page format'
+
+    def test_explore_val(self):
+        rv = self.app.get('/datasets/images/classification/explore?job_id=%s&db=val' % self.dataset_id)
+        assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
+        assert 'Items per page' in rv.data, 'unexpected page format'
+
+    def test_abort_explore_fail(self):
+        job_id = self.create_dataset()
+        self.abort_dataset(job_id)
+        rv = self.app.get('/datasets/images/classification/explore?job_id=%s&db=val' % job_id)
+        assert rv.status_code == 500, 'page load should have failed'
+        assert 'status should be' in rv.data, 'unexpected page format'
+
+    def test_explore_not_existing_db_fail(self):
+        rv = self.app.get('/datasets/images/classification/explore?job_id=%s&db=test' % self.dataset_id)
+        assert rv.status_code == 500, 'page load should have failed'
+        assert 'No create_db task' in rv.data, 'unexpected page format'
+
+class TestCreatedHDF5Explore(TestCreated):
+    BACKEND = 'hdf5'
+
+    def test_explore_train_fail(self):
+        rv = self.app.get('/datasets/images/classification/explore?job_id=%s&db=train' % self.dataset_id)
+        assert rv.status_code == 500, 'page load should have failed'
+        assert 'expected backend is lmdb' in rv.data, 'unexpected page format'
+
 class TestCreatedGrayscale(TestCreated):
     IMAGE_CHANNELS = 1
 
@@ -453,5 +484,3 @@ class TestCreatedHdf5(TestCreated):
 
 class TestCreatedHdf5Gzip(TestCreatedHdf5):
     COMPRESSION = 'gzip'
-
-

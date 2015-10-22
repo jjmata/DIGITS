@@ -1,3 +1,5 @@
+/* Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved. */
+
 body {
     padding-top: 50px;
     padding-bottom: 50px;
@@ -26,6 +28,13 @@ path.c3-line {
 .autocomplete-suggestions strong { font-weight: normal; color: #3399FF; }
 .autocomplete-group { padding: 2px 5px; }
 .autocomplete-group strong { display: block; border-bottom: 1px solid #000; }
+
+/* To fix the tooltip in the sparkline */
+.jqstooltip {
+  -webkit-box-sizing: content-box;
+  -moz-box-sizing: content-box;
+  box-sizing: content-box;
+}
 
 .btn-file {
     position: relative;
@@ -58,3 +67,11 @@ input[readonly]:disabled {
     cursor: not-allowed !important;
 }
 
+a.active {
+	font-weight: 900;
+	color: black;
+}
+
+ul.inline li {
+	display: inline-block;
+}

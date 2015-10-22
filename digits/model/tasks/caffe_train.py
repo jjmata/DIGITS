@@ -703,7 +703,11 @@ class CaffeTrainTask(TrainTask):
             if len(identifiers) == 1:
                 args.append('--gpu=%s' % identifiers[0])
             elif len(identifiers) > 1:
-                args.append('--gpus=%s' % ','.join(identifiers))
+                if config_value('caffe_root')['version'] < utils.parse_version('0.14.0-alpha'):
+                    # Prior to version 0.14, NVcaffe used the --gpus switch
+                    args.append('--gpus=%s' % ','.join(identifiers))
+                else:
+                    args.append('--gpu=%s' % ','.join(identifiers))
         if self.pretrained_model:
             args.append('--weights=%s' % self.path(self.pretrained_model))
 
@@ -852,6 +856,8 @@ class CaffeTrainTask(TrainTask):
                     lines.append(message)
             # return the last 20 lines
             self.traceback = '\n'.join(lines[len(lines)-20:])
+            if 'DIGITS_MODE_TEST' in os.environ:
+                print self.traceback
 
     ### TrainTask overrides
 
@@ -1176,7 +1182,7 @@ class CaffeTrainTask(TrainTask):
                         'data', image)
             output = net.forward()[net.outputs[-1]]
             if scores is None:
-                scores = output
+                scores = np.copy(output)
             else:
                 scores = np.vstack((scores, output))
             print 'Processed %s/%s images' % (len(scores), len(caffe_images))

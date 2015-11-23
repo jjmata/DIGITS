@@ -237,14 +237,12 @@ class TorchTrainTask(TrainTask):
         if 'gpus' in resources:
             identifiers = []
             for identifier, value in resources['gpus']:
-                identifiers.append(int(identifier))
-            if len(identifiers) == 1:
-                # only one device must be visible to the th process
-                # to prevent Torch from loading libraries on all GPUs
-                env['CUDA_VISIBLE_DEVICES'] = str(identifiers[0])
-                args.append('--devid=1')
-            elif len(identifiers) > 1:
-                raise NotImplementedError("Multi-GPU with Torch not supported yet")
+                identifiers.append(identifier)
+            # make all selected GPUs visible to the Torch 'th' process.
+            # don't make other GPUs visible though since Torch will load
+            # CUDA libraries and allocate memory on all visible GPUs by
+            # default.
+            env['CUDA_VISIBLE_DEVICES'] = ','.join(identifiers)
         else:
             # switch to CPU mode
             args.append('--type=float')

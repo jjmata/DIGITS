@@ -118,7 +118,6 @@ end
 
 -- return function that returns network definition
 return function(params)
-    assert(params.ngpus<=1, 'Model supports only one GPU')
     -- get number of classes from external parameters
     local nclasses = params.nclasses or 1
     -- adjust to number of channels in input images
@@ -129,7 +128,7 @@ return function(params)
         assert(params.inputShape[2]==256 and params.inputShape[3]==256, 'Network expects 256x256 images')
     end
     return {
-        model = createModel(1, channels, nclasses),
+        model = createModel(params.ngpus, channels, nclasses),
         croplen = 224,
         trainBatchSize = 24,
         validationBatchSize = 24,

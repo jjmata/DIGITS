@@ -18,8 +18,7 @@ else
 end
 
 function createModel(nGPU, channels, nClasses)
-   assert(nGPU == 1 or nGPU == 2, '1-GPU or 2-GPU supported for AlexNet')
-   
+   local features = nn.Concat(2)
    -- this is alexnet as presented in Krizhevsky et al., 2012
    local features = nn.Sequential()
    features:add(convLayer(channels,96,11,11,4,4,2,2))       -- 224 ->  55
@@ -35,10 +34,19 @@ function createModel(nGPU, channels, nClasses)
    features:add(convLayer(384,256,3,3,1,1,1,1))             --  13 ->  13
    features:add(backend.ReLU(true))
    features:add(backend.SpatialMaxPooling(3,3,2,2))         --  13 ->  6
-
    -- set grad input of first conv layer to nil as this layer
    -- doesn't receive a grad input from a previous layer
    features:get(1).gradInput = nil
+
+   local parallel_features
+   if nGPU>1 then
+      parallel_features = nn.DataParallelTable(1)  -- Split along first (batch) dimension
+      for i = 1, nGPU do
+         cutorch.setDevice(i)
+         parallel_features:add(features:clone(), i)  -- Use the ith GPU
+      end
+      cutorch.setDevice(1)  -- This is the 'primary' GPU
+   end
 
    local classifier = nn.Sequential()
    classifier:add(nn.View(256*6*6))
@@ -51,14 +59,18 @@ function createModel(nGPU, channels, nClasses)
    classifier:add(nn.Linear(4096, nClasses))
    classifier:add(backend.LogSoftMax())
 
-   local model = nn.Sequential():add(features):add(classifier)
+   local model
+   if parallel_features then
+      model = nn.Sequential():add(parallel_features):add(classifier)
+   else
+      model = nn.Sequential():cuda():add(features):add(classifier)
+   end
 
    return model
 end
 
 -- return function that returns network definition
 return function(params)
-    assert(params.ngpus<=1, 'Model supports only one GPU')
     -- get number of classes from external parameters
     local nclasses = params.nclasses or 1
     -- adjust to number of channels in input images

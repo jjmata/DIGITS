@@ -713,7 +713,7 @@ local function Train(epoch, dataLoader)
             -- DataParallelTable's syncParameters
             model:apply(function(m) if m.syncParameters then m:syncParameters() end end)
 
-            cutorch.synchronize()
+            --cutorch.synchronize()
 
             -- adding the loss values of each mini batch and also maintaining the counter for number of batches, so that average loss value can be found at the time of logging details
             loss_sum = loss_sum + trainerr[1]

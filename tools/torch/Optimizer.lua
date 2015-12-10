@@ -57,9 +57,18 @@ function Optimizer:optimize(x,yt)
         if self.HookFunction then
             value = self.HookFunction(y,label,err)
         end
+        for i,layer in ipairs(self.Model:listModules()) do
+            local gradWeight = layer.gradWeight
+            local weight = layer.weight
+            local name = tostring(layer)
+            if weight and gradWeight then                
+                --print(string.format("%s: w(m=%.7f std=%.7f) gw(m=%.7f std=%.7f)",
+                --    name, weight:mean()*1000,weight:std()*1000, gradWeight:mean()*1000, gradWeight:std()*1000))
+            end                        
+        end
         return err, self.Gradients
     end
-
+    
     if self.lrPolicy.policy ~= 'torch_sgd' then
         self.OptState.learningRate = self.lrPolicy:GetLearningRate(self.OptState.evalCounter or 0)   --- here self.OptState.evalCounter = iter/stepsize
     end

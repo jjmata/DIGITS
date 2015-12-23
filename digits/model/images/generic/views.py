@@ -11,14 +11,13 @@ from digits import frameworks
 from digits.config import config_value
 from digits import utils
 from digits.utils.routing import request_wants_json, job_from_request
+from digits.utils.forms import fill_form_if_cloned, save_form_to_job
 from digits.webapp import app, scheduler, autodoc
 from digits.dataset import GenericImageDatasetJob
-from digits import frameworks
-from digits.model import tasks
 from forms import GenericImageModelForm
 from job import GenericImageModelJob
 from digits.status import Status
-import platform
+from digits.utils import filesystem as fs
 
 NAMESPACE   = '/models/images/generic'
 
@@ -34,6 +33,9 @@ def generic_image_model_new():
     form.previous_networks.choices = get_previous_networks()
 
     prev_network_snapshots = get_previous_network_snapshots()
+
+    ## Is there a request to clone a job with ?clone=<job_id>
+    fill_form_if_cloned(form)
 
     return flask.render_template('models/images/generic/new.html',
             form = form,
@@ -58,6 +60,9 @@ def generic_image_model_create():
     form.previous_networks.choices = get_previous_networks()
 
     prev_network_snapshots = get_previous_network_snapshots()
+
+    ## Is there a request to clone a job with ?clone=<job_id>
+    fill_form_if_cloned(form)
 
     if not form.validate_on_submit():
         if request_wants_json():
@@ -163,6 +168,14 @@ def generic_image_model_create():
                 selected_gpus = [str(form.select_gpu.data)]
                 gpu_count = None
 
+        # Python Layer File may be on the server or copied from the client.
+        fs.copy_python_layer_file(
+            bool(form.python_layer_from_client.data),
+            job.dir(),
+            (flask.request.files[form.python_layer_client_file.name]
+             if form.python_layer_client_file.name in flask.request.files
+             else ''), form.python_layer_server_file.data)
+
         job.tasks.append(fw.create_train_task(
                     job_dir         = job.dir(),
                     dataset         = datasetJob,
@@ -176,13 +189,16 @@ def generic_image_model_create():
                     val_interval    = form.val_interval.data,
                     pretrained_model= pretrained_model,
                     crop_size       = form.crop_size.data,
-                    use_mean        = bool(form.use_mean.data),
+                    use_mean        = form.use_mean.data,
                     network         = network,
                     random_seed     = form.random_seed.data,
                     solver_type     = form.solver_type.data,
                     shuffle         = form.shuffle.data,
                     )
                 )
+
+        ## Save form data with the job so we can easily clone it later.
+        save_form_to_job(job, form)
 
         scheduler.add_job(job)
         if request_wants_json():
@@ -236,9 +252,6 @@ def generic_image_model_infer_one():
     db_task = job.train_task().dataset.analyze_db_tasks()[0]
     height = db_task.image_height
     width = db_task.image_width
-    if job.train_task().crop_size:
-        height = job.train_task().crop_size
-        width = job.train_task().crop_size
     image = utils.image.resize_image(image, height, width,
             channels = db_task.image_channels,
             resize_mode = 'squash',
@@ -288,9 +301,6 @@ def generic_image_model_infer_many():
     db_task = job.train_task().dataset.analyze_db_tasks()[0]
     height = db_task.image_height
     width = db_task.image_width
-    if job.train_task().crop_size:
-        height = job.train_task().crop_size
-        width = job.train_task().crop_size
     channels = db_task.image_channels
 
     for line in image_list.readlines():
@@ -339,21 +349,21 @@ def generic_image_model_infer_many():
 
 def get_datasets():
     return [(j.id(), j.name()) for j in sorted(
-        [j for j in scheduler.jobs if isinstance(j, GenericImageDatasetJob) and (j.status.is_running() or j.status == Status.DONE)],
+        [j for j in scheduler.jobs.values() if isinstance(j, GenericImageDatasetJob) and (j.status.is_running() or j.status == Status.DONE)],
         cmp=lambda x,y: cmp(y.id(), x.id())
         )
         ]
 
 def get_previous_networks():
     return [(j.id(), j.name()) for j in sorted(
-        [j for j in scheduler.jobs if isinstance(j, GenericImageModelJob)],
+        [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)],
         cmp=lambda x,y: cmp(y.id(), x.id())
         )
         ]
 
 def get_previous_networks_fulldetails():
     return [(j) for j in sorted(
-        [j for j in scheduler.jobs if isinstance(j, GenericImageModelJob)],
+        [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)],
         cmp=lambda x,y: cmp(y.id(), x.id())
         )
         ]

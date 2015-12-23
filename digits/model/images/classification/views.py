@@ -4,7 +4,6 @@ import os
 import re
 import tempfile
 import random
-import shutil
 import flask
 import werkzeug.exceptions
 import numpy as np
@@ -19,8 +18,8 @@ from digits import frameworks
 from forms import ImageClassificationModelForm
 from job import ImageClassificationModelJob
 from digits.status import Status
-import platform
-from digits.utils import errors
+from digits.utils.forms import fill_form_if_cloned, save_form_to_job
+from digits.utils import filesystem as fs
 
 NAMESPACE   = '/models/images/classification'
 
@@ -37,6 +36,9 @@ def image_classification_model_new():
     form.previous_networks.choices = get_previous_networks()
 
     prev_network_snapshots = get_previous_network_snapshots()
+
+    ## Is there a request to clone a job with ?clone=<job_id>
+    fill_form_if_cloned(form)
 
     return flask.render_template('models/images/classification/new.html',
             form = form,
@@ -62,6 +64,9 @@ def image_classification_model_create():
     form.previous_networks.choices = get_previous_networks()
 
     prev_network_snapshots = get_previous_network_snapshots()
+
+    ## Is there a request to clone a job with ?clone=<job_id>
+    fill_form_if_cloned(form)
 
     if not form.validate_on_submit():
         if request_wants_json():
@@ -180,6 +185,14 @@ def image_classification_model_create():
                 selected_gpus = [str(form.select_gpu.data)]
                 gpu_count = None
 
+        # Python Layer File may be on the server or copied from the client.
+        fs.copy_python_layer_file(
+            bool(form.python_layer_from_client.data),
+            job.dir(),
+            (flask.request.files[form.python_layer_client_file.name]
+             if form.python_layer_client_file.name in flask.request.files
+             else ''), form.python_layer_server_file.data)
+
         job.tasks.append(fw.create_train_task(
                     job_dir         = job.dir(),
                     dataset         = datasetJob,
@@ -193,13 +206,16 @@ def image_classification_model_create():
                     val_interval    = form.val_interval.data,
                     pretrained_model= pretrained_model,
                     crop_size       = form.crop_size.data,
-                    use_mean        = bool(form.use_mean.data),
+                    use_mean        = form.use_mean.data,
                     network         = network,
                     random_seed     = form.random_seed.data,
                     solver_type     = form.solver_type.data,
                     shuffle         = form.shuffle.data,
                     )
                 )
+
+        ## Save form data with the job so we can easily clone it later.
+        save_form_to_job(job, form)
 
         scheduler.add_job(job)
         if request_wants_json():
@@ -255,9 +271,6 @@ def image_classification_model_classify_one():
     db_task = job.train_task().dataset.train_db_task()
     height = db_task.image_dims[0]
     width = db_task.image_dims[1]
-    if job.train_task().crop_size:
-        height = job.train_task().crop_size
-        width = job.train_task().crop_size
     image = utils.image.resize_image(image, height, width,
             channels = db_task.image_dims[2],
             resize_mode = db_task.resize_mode,
@@ -459,7 +472,7 @@ def image_classification_model_top_n():
 
 def get_datasets():
     return [(j.id(), j.name()) for j in sorted(
-        [j for j in scheduler.jobs if isinstance(j, ImageClassificationDatasetJob) and (j.status.is_running() or j.status == Status.DONE)],
+        [j for j in scheduler.jobs.values() if isinstance(j, ImageClassificationDatasetJob) and (j.status.is_running() or j.status == Status.DONE)],
         cmp=lambda x,y: cmp(y.id(), x.id())
         )
         ]
@@ -477,14 +490,14 @@ def get_default_standard_network():
 
 def get_previous_networks():
     return [(j.id(), j.name()) for j in sorted(
-        [j for j in scheduler.jobs if isinstance(j, ImageClassificationModelJob)],
+        [j for j in scheduler.jobs.values() if isinstance(j, ImageClassificationModelJob)],
         cmp=lambda x,y: cmp(y.id(), x.id())
         )
         ]
 
 def get_previous_networks_fulldetails():
     return [(j) for j in sorted(
-        [j for j in scheduler.jobs if isinstance(j, ImageClassificationModelJob)],
+        [j for j in scheduler.jobs.values() if isinstance(j, ImageClassificationModelJob)],
         cmp=lambda x,y: cmp(y.id(), x.id())
         )
         ]

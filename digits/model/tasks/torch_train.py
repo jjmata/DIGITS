@@ -2,26 +2,21 @@
 
 import os
 import re
-import caffe
 import time
-import math
 import subprocess
-import sys
 import operator
 import shutil
+import tempfile
 
 import numpy as np
-
 import h5py
-
-import tempfile
 import PIL.Image
+
 import digits
 from train import TrainTask
 from digits.config import config_value
-from digits.status import Status
 from digits import utils, dataset
-from digits.utils import subclass, override, constants, errors
+from digits.utils import subclass, override, constants
 from digits.dataset import ImageClassificationDatasetJob
 
 # to read mean file in .binaryproto format
@@ -33,7 +28,6 @@ PICKLE_VERSION = 1
 # Constants
 TORCH_MODEL_FILE = 'model.lua'
 TORCH_SNAPSHOT_PREFIX = 'snapshot'
-TORCH_USE_MEAN_PIXEL = True
 
 @subclass
 class TorchTrainTask(TrainTask):
@@ -126,7 +120,8 @@ class TorchTrainTask(TrainTask):
         assert dataset_backend=='lmdb' or dataset_backend=='hdf5'
 
         args = [torch_bin,
-                os.path.join(os.path.dirname(os.path.dirname(digits.__file__)),'tools','torch','main.lua'),
+                os.path.join(os.path.dirname(os.path.dirname(digits.__file__)),'tools','torch','wrapper.lua'),
+                'main.lua',
                 '--network=%s' % self.model_file.split(".")[0],
                 '--epoch=%d' % int(self.train_epochs),
                 '--networkDirectory=%s' % self.job_dir,
@@ -169,10 +164,10 @@ class TorchTrainTask(TrainTask):
                 args.append('--validation=%s' % val_image_db.path(val_image_db.database))
             if val_labels_db:
                 args.append('--validation_labels=%s' % val_labels_db.path(val_labels_db.database))
-            if self.use_mean:
+            if self.use_mean != 'none':
                 assert self.dataset.mean_file.endswith('.binaryproto'), 'Mean subtraction required but dataset has no mean file in .binaryproto format'
                 blob = caffe_pb2.BlobProto()
-                with open(task.path(self.dataset.mean_file),'rb') as infile:
+                with open(self.dataset.path(self.dataset.mean_file),'rb') as infile:
                     blob.ParseFromString(infile.read())
                 data = np.array(blob.data, dtype=np.uint8).reshape(blob.channels, blob.height, blob.width)
                 if blob.channels == 3:
@@ -184,7 +179,7 @@ class TorchTrainTask(TrainTask):
                     assert blob.channels == 1
                     # convert to (height, width)
                     data = data[0]
-                 # save to file
+                # save to file
                 filename = os.path.join(self.job_dir, constants.MEAN_FILE_IMAGE)
                 image = PIL.Image.fromarray(data)
                 image.save(filename)
@@ -217,10 +212,12 @@ class TorchTrainTask(TrainTask):
             args.append('--crop=yes')
             args.append('--croplen=%d' % self.crop_size)
 
-        if self.use_mean:
-            args.append('--subtractMean=yes')
+        if self.use_mean == 'pixel':
+            args.append('--subtractMean=pixel')
+        elif self.use_mean == 'image':
+            args.append('--subtractMean=image')
         else:
-            args.append('--subtractMean=no')
+            args.append('--subtractMean=none')
 
         if self.random_seed is not None:
             args.append('--seed=%s' % self.random_seed)
@@ -260,7 +257,6 @@ class TorchTrainTask(TrainTask):
 
     @override
     def process_output(self, line):
-        from digits.webapp import socketio
         regex = re.compile('\x1b\[[0-9;]*m', re.UNICODE)   #TODO: need to include regular expression for MAC color codes
         line=regex.sub('', line).strip()
         self.torch_log.write('%s\n' % line)
@@ -430,13 +426,15 @@ class TorchTrainTask(TrainTask):
             else:
                 self.traceback = traceback
 
+            if 'DIGITS_MODE_TEST' in os.environ:
+                print output
+
     @override
     def detect_snapshots(self):
         self.snapshots = []
 
         snapshot_dir = os.path.join(self.job_dir, os.path.dirname(self.snapshot_prefix))
         snapshots = []
-        solverstates = []
 
         for filename in os.listdir(snapshot_dir):
             # find models
@@ -502,7 +500,8 @@ class TorchTrainTask(TrainTask):
             torch_bin = os.path.join(config_value('torch_root'), 'bin', 'th')
 
         args = [torch_bin,
-                os.path.join(os.path.dirname(os.path.dirname(digits.__file__)),'tools','torch','test.lua'),
+                os.path.join(os.path.dirname(os.path.dirname(digits.__file__)),'tools','torch','wrapper.lua'),
+                'test.lua',
                 '--image=%s' % temp_image_path,
                 '--network=%s' % self.model_file.split(".")[0],
                 '--networkDirectory=%s' % self.job_dir,
@@ -513,27 +512,26 @@ class TorchTrainTask(TrainTask):
             args.append('--labels=%s' % self.dataset.path(self.dataset.labels_file))
             args.append('--mean=%s' % self.dataset.path(constants.MEAN_FILE_IMAGE))
             args.append('--allPredictions=no')
-            if self.use_mean:
-                args.append('--subtractMean=yes')
-            else:
-                args.append('--subtractMean=no')
         elif isinstance(self.dataset, dataset.GenericImageDatasetJob):
-            if self.use_mean:
+            if self.use_mean != 'none':
                 args.append('--mean=%s' % os.path.join(self.job_dir, constants.MEAN_FILE_IMAGE))
-                args.append('--subtractMean=yes')
-            else:
-                args.append('--subtractMean=no')
             args.append('--allPredictions=yes')
 
         if snapshot_epoch:
             args.append('--epoch=%d' % int(snapshot_epoch))
-        if TORCH_USE_MEAN_PIXEL:
-            args.append('--useMeanPixel=yes')
         if self.trained_on_cpu:
             args.append('--type=float')
 
-        # input image has been resized to network input dimensions by caller
-        args.append('--crop=no')
+        if self.use_mean == 'pixel':
+            args.append('--subtractMean=pixel')
+        elif self.use_mean == 'image':
+            args.append('--subtractMean=image')
+        else:
+            args.append('--subtractMean=none')
+
+        if self.crop_size:
+            args.append('--crop=yes')
+            args.append('--croplen=%d' % self.crop_size)
 
         if layers=='all':
             args.append('--visualization=yes')
@@ -561,7 +559,7 @@ class TorchTrainTask(TrainTask):
                 for line in utils.nonblocking_readlines(p.stdout):
                     if self.aborted.is_set():
                         p.terminate()
-                        raise digits.frameworks.errors.InferenceError('%s classify one task got aborted. error code - %d' % (self.get_framework_id(), p.returncode()))
+                        raise digits.frameworks.errors.InferenceError('%s classify one task got aborted. error code - %d' % (self.get_framework_id(), p.returncode))
 
                     if line is not None:
                         # Remove color codes and whitespace
@@ -580,7 +578,7 @@ class TorchTrainTask(TrainTask):
             if type(e) == digits.frameworks.errors.InferenceError:
                 error_message = e.__str__()
             else:
-                error_message = '%s classify one task failed with error code %d \n %s' % (self.get_framework_id(), p.returncode(), str(e))
+                error_message = '%s classify one task failed with error code %d \n %s' % (self.get_framework_id(), p.returncode, str(e))
             self.logger.error(error_message)
             if unrecognized_output:
                 unrecognized_output = '\n'.join(unrecognized_output)
@@ -703,8 +701,6 @@ class TorchTrainTask(TrainTask):
             pass
 
     def process_test_output(self, line, predictions, test_category):
-        #from digits.webapp import socketio
-
         # parse torch output
         timestamp, level, message = self.preprocess_output_torch(line)
 
@@ -722,7 +718,7 @@ class TorchTrainTask(TrainTask):
         if match:
             label = match.group(1)
             confidence = match.group(2)
-            assert not('inf' in confidence or 'nan' in confidence), 'Network reported %s for confidence value. Please check image and network'  % l
+            assert not('inf' in confidence or 'nan' in confidence), 'Network reported %s for confidence value. Please check image and network'  % label
             confidence = float(confidence)
             predictions.append((label, confidence))
             return True
@@ -731,7 +727,7 @@ class TorchTrainTask(TrainTask):
         match = re.match(r'Predictions for image \d+: (.*)', message)
         if match:
             values = match.group(1).strip().split(" ")
-	    predictions.append(map(float, values))
+            predictions.append(map(float, values))
             return True
 
         # path to visualization file
@@ -802,7 +798,8 @@ class TorchTrainTask(TrainTask):
                 torch_bin = os.path.join(config_value('torch_root'), 'bin', 'th')
 
             args = [torch_bin,
-                    os.path.join(os.path.dirname(os.path.dirname(digits.__file__)),'tools','torch','test.lua'),
+                    os.path.join(os.path.dirname(os.path.dirname(digits.__file__)),'tools','torch','wrapper.lua'),
+                    'test.lua',
                     '--testMany=yes',
                     '--allPredictions=yes',   #all predictions are grabbed and formatted as required by DIGITS
                     '--image=%s' % str(temp_imglist_path),
@@ -817,26 +814,25 @@ class TorchTrainTask(TrainTask):
                 labels = self.get_labels()         #TODO: probably we no need to return this, as we can directly access from the calling function
                 args.append('--labels=%s' % self.dataset.path(self.dataset.labels_file))
                 args.append('--mean=%s' % self.dataset.path(constants.MEAN_FILE_IMAGE))
-                if self.use_mean:
-                    args.append('--subtractMean=yes')
-                else:
-                    args.append('--subtractMean=no')
             elif isinstance(self.dataset, dataset.GenericImageDatasetJob):
-                if self.use_mean:
+                if self.use_mean != 'none':
                     args.append('--mean=%s' % os.path.join(self.job_dir, constants.MEAN_FILE_IMAGE))
-                    args.append('--subtractMean=yes')
-                else:
-                    args.append('--subtractMean=no')
 
             if snapshot_epoch:
                 args.append('--epoch=%d' % int(snapshot_epoch))
-            if TORCH_USE_MEAN_PIXEL:
-                args.append('--useMeanPixel=yes')
             if self.trained_on_cpu:
                 args.append('--type=float')
 
-            # input images have been resized to network input dimensions by caller
-            args.append('--crop=no')
+            if self.use_mean == 'pixel':
+                args.append('--subtractMean=pixel')
+            elif self.use_mean == 'image':
+                args.append('--subtractMean=image')
+            else:
+                args.append('--subtractMean=none')
+
+            if self.crop_size:
+                args.append('--crop=yes')
+                args.append('--croplen=%d' % self.crop_size)
 
             # Convert them all to strings
             args = [str(x) for x in args]
@@ -858,7 +854,7 @@ class TorchTrainTask(TrainTask):
                     for line in utils.nonblocking_readlines(p.stdout):
                         if self.aborted.is_set():
                             p.terminate()
-                            raise digits.frameworks.errors.InferenceError('%s classify many task got aborted. error code - %d' % (self.get_framework_id(), p.returncode()))
+                            raise digits.frameworks.errors.InferenceError('%s classify many task got aborted. error code - %d' % (self.get_framework_id(), p.returncode))
 
                         if line is not None:
                             # Remove whitespace and color codes. color codes are appended to begining and end of line by torch binary i.e., 'th'. Check the below link for more information
@@ -877,7 +873,7 @@ class TorchTrainTask(TrainTask):
                 if type(e) == digits.frameworks.errors.InferenceError:
                     error_message = e.__str__()
                 else:
-                    error_message = '%s classify many task failed with error code %d \n %s' % (self.get_framework_id(), p.returncode(), str(e))
+                    error_message = '%s classify many task failed with error code %d \n %s' % (self.get_framework_id(), p.returncode, str(e))
                 self.logger.error(error_message)
                 if unrecognized_output:
                     unrecognized_output = '\n'.join(unrecognized_output)
@@ -925,5 +921,4 @@ class TorchTrainTask(TrainTask):
         with open (os.path.join(self.job_dir,TORCH_MODEL_FILE), "r") as infile:
             desc = infile.read()
         return desc
-
 

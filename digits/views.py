@@ -94,7 +94,7 @@ def home():
 
 def get_job_list(cls, running):
     return sorted(
-            [j for j in scheduler.jobs if isinstance(j, cls) and j.status.is_running() == running],
+            [j for j in scheduler.jobs.values() if isinstance(j, cls) and j.status.is_running() == running],
             key=lambda j: j.status_history[0][1],
             reverse=True,
             )
@@ -166,21 +166,6 @@ def job_status(job_id):
         result['type'] = job.job_type()
     return json.dumps(result)
 
-@app.route('/job_management', methods=['GET'])
-@autodoc('util')
-def job_management():
-    """
-    Return the jobs management page
-
-    """
-
-    running_datasets    = get_job_list(dataset.DatasetJob, True)
-    running_models      = get_job_list(model.ModelJob, True)
-
-    return flask.render_template('job_management.html',
-                                 running_job = running_datasets + running_models,
-                             )
-
 @app.route('/datasets/<job_id>', methods=['DELETE'])
 @app.route('/models/<job_id>', methods=['DELETE'])
 @app.route('/jobs/<job_id>', methods=['DELETE'])
@@ -217,6 +202,30 @@ def abort_job(job_id):
         return 'Job aborted.'
     else:
         raise werkzeug.exceptions.Forbidden('Job not aborted')
+
+@app.route('/clone/<clone>', methods=['POST', 'GET'])
+@autodoc('jobs')
+def clone_job(clone):
+    """
+    Clones a job with the id <clone>, populating the creation page with data saved in <clone>
+    """
+
+    ## <clone> is the job_id to clone
+
+    job = scheduler.get_job(clone)
+    if job is None:
+        raise werkzeug.exceptions.NotFound('Job not found')
+
+    if isinstance(job, dataset.ImageClassificationDatasetJob):
+        return flask.redirect(flask.url_for('image_classification_dataset_new') + '?clone=' + clone)
+    if isinstance(job, dataset.GenericImageDatasetJob):
+        return flask.redirect(flask.url_for('generic_image_dataset_new') + '?clone=' + clone)
+    if isinstance(job, model.ImageClassificationModelJob):
+        return flask.redirect(flask.url_for('image_classification_model_new') + '?clone=' + clone)
+    if isinstance(job, model.GenericImageModelJob):
+        return flask.redirect(flask.url_for('generic_image_model_new') + '?clone=' + clone)
+    else:
+        raise werkzeug.exceptions.BadRequest('Invalid job type')
 
 ### Error handling
 

@@ -1,14 +1,10 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 # Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
 
 import sys
 import os.path
 import time
 from collections import defaultdict
-
-# requires a custom version of Flask-Autodoc:
-#   pip install git+https://github.com/lukeyeager/flask-autodoc.git
-from flask.ext.autodoc import Autodoc
 
 # Add path for DIGITS package
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -176,7 +172,12 @@ class ApiDocGenerator(DocGenerator):
 
 %s
 
-DIGITS exposes its internal functionality through a REST API. You can access these endpoints by performing a GET or POST on the route, and a JSON object will be returned.
+DIGITS exposes its internal functionality through a REST API.
+You can access these endpoints by performing a GET or POST on the route, and a JSON object will be returned.
+For example:
+```sh
+curl localhost/index.json
+```
 
 For more information about other routes used for the web interface, see [this page](FlaskRoutes.md).
 """ % self.timestamp()

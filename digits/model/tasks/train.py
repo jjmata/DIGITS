@@ -7,9 +7,9 @@ from collections import OrderedDict, namedtuple
 import gevent
 import flask
 
-from digits import utils, device_query
+from digits import device_query
 from digits.task import Task
-from digits.utils import override
+from digits.utils import subclass, override
 
 # NOTE: Increment this everytime the picked object changes
 PICKLE_VERSION = 2
@@ -17,6 +17,7 @@ PICKLE_VERSION = 2
 # Used to store network outputs
 NetworkOutput = namedtuple('NetworkOutput', ['kind', 'data'])
 
+@subclass
 class TrainTask(Task):
     """
     Defines required methods for child classes
@@ -38,7 +39,7 @@ class TrainTask(Task):
         val_interval -- how many epochs between validating the model with an epoch of validation data
         pretrained_model -- filename for a model to use for fine-tuning
         crop_size -- crop each image down to a square of this size
-        use_mean -- subtract the dataset's mean file
+        use_mean -- subtract the dataset's mean file or mean pixel
         random_seed -- optional random seed
         """
         self.gpu_count = kwargs.pop('gpu_count', None)
@@ -84,7 +85,6 @@ class TrainTask(Task):
 
     def __setstate__(self, state):
         if state['pickver_task_train'] < 2:
-            print 'Upgrading TrainTask to version 2'
             state['train_outputs'] = OrderedDict()
             state['val_outputs'] = OrderedDict()
 
@@ -101,6 +101,12 @@ class TrainTask(Task):
                 if va:
                     state['val_outputs']['accuracy'] = NetworkOutput('Accuracy', [x[1]/100 for x in va])
                 state['val_outputs']['loss'] = NetworkOutput('SoftmaxWithLoss', [x[1] for x in vl])
+
+        if state['use_mean'] == True:
+            state['use_mean'] = 'pixel'
+        elif state['use_mean'] == False:
+            state['use_mean'] = 'none'
+
         state['pickver_task_train'] = PICKLE_VERSION
         super(TrainTask, self).__setstate__(state)
 
@@ -200,8 +206,6 @@ class TrainTask(Task):
         """
         Sends socketio message about the current progress
         """
-        from digits.webapp import socketio
-
         if self.current_epoch == epoch:
             return
 

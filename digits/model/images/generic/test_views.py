@@ -68,12 +68,18 @@ layer {
 
     TORCH_NETWORK = \
 """
-require 'nn'
-local net = nn.Sequential()
-net:add(nn.MulConstant(0.004))
-net:add(nn.View(-1):setNumInputDims(3))  -- 1*10*10 -> 100
-net:add(nn.Linear(100,2))
-return function(params)
+return function(p)
+    local nDim = 1
+    if p.inputShape then p.inputShape:apply(function(x) nDim=nDim*x end) end
+    local net = nn.Sequential()
+    net:add(nn.MulConstant(0.004))
+    net:add(nn.View(-1):setNumInputDims(3))  -- flatten
+    -- set all weights and biases to zero as this speeds learning up
+    -- for the type of problem we're trying to solve in this test
+    local linearLayer = nn.Linear(nDim, 2)
+    linearLayer.weight:fill(0)
+    linearLayer.bias:fill(0)
+    net:add(linearLayer) -- c*h*w -> 2
     return {
         model = net,
         loss = nn.MSECriterion(),
@@ -313,6 +319,42 @@ class BaseTestCreation(BaseViewsTestWithDataset):
         job_id = self.create_model(select_gpus_list=','.join(gpu_list), batch_size=len(gpu_list))
         assert self.model_wait_completion(job_id) == 'Done', 'create failed'
 
+    def infer_one_for_job(self, job_id):
+        # carry out one inference test per category in dataset
+        image_path = os.path.join(self.imageset_folder, self.test_image)
+        with open(image_path,'rb') as infile:
+            # StringIO wrapping is needed to simulate POST file upload.
+            image_upload = (StringIO(infile.read()), 'image.png')
+
+        rv = self.app.post(
+                '/models/images/generic/infer_one?job_id=%s' % job_id,
+                data = {
+                    'image_file': image_upload,
+                    'show_visualizations': 'y',
+                    }
+                )
+        s = BeautifulSoup(rv.data, 'html.parser')
+        body = s.select('body')
+        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
+
+    def test_infer_one_mean_image(self):
+        # test the creation
+        job_id = self.create_model(use_mean = 'image')
+        assert self.model_wait_completion(job_id) == 'Done', 'job failed'
+        self.infer_one_for_job(job_id)
+
+    def test_infer_one_mean_pixel(self):
+        # test the creation
+        job_id = self.create_model(use_mean = 'pixel')
+        assert self.model_wait_completion(job_id) == 'Done', 'job failed'
+        self.infer_one_for_job(job_id)
+
+    def test_infer_one_mean_none(self):
+        # test the creation
+        job_id = self.create_model(use_mean = 'none')
+        assert self.model_wait_completion(job_id) == 'Done', 'job failed'
+        self.infer_one_for_job(job_id)
+
     def test_retrain(self):
         job1_id = self.create_model()
         assert self.model_wait_completion(job1_id) == 'Done', 'first job failed'
@@ -360,6 +402,60 @@ class BaseTestCreation(BaseViewsTestWithDataset):
         assert self.model_wait_completion(job_id) == 'Error', 'job should have failed'
         job_info = self.job_info_html(job_id=job_id, job_type='models')
         assert 'Try decreasing your learning rate' in job_info
+
+    def test_clone(self):
+        options_1 = {
+            'shuffle': True,
+            'lr_step_size': 33.0,
+            'previous_networks': 'None',
+            'lr_inv_power': 0.5,
+            'lr_inv_gamma': 0.1,
+            'lr_poly_power': 3.0,
+            'lr_exp_gamma': 0.95,
+            'use_mean': 'image',
+            'custom_network_snapshot': '',
+            'lr_multistep_gamma': 0.5,
+            'lr_policy': 'step',
+            'crop_size': None,
+            'val_interval': 3.0,
+            'random_seed': 123,
+            'learning_rate': 0.01,
+            'standard_networks': 'None',
+            'lr_step_gamma': 0.1,
+            'lr_sigmoid_step': 50.0,
+            'lr_sigmoid_gamma': 0.1,
+            'lr_multistep_values': '50,85',
+            'solver_type': 'SGD',
+        }
+
+        job1_id = self.create_model(**options_1)
+        assert self.model_wait_completion(job1_id) == 'Done', 'first job failed'
+        rv = self.app.get('/models/%s.json' % job1_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content1 = json.loads(rv.data)
+
+        ## Clone job1 as job2
+        options_2 = {
+            'clone': job1_id,
+        }
+
+        job2_id = self.create_model(**options_2)
+        assert self.model_wait_completion(job2_id) == 'Done', 'second job failed'
+        rv = self.app.get('/models/%s.json' % job2_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content2 = json.loads(rv.data)
+
+        ## These will be different
+        content1.pop('id')
+        content2.pop('id')
+        content1.pop('directory')
+        content2.pop('directory')
+        assert (content1 == content2), 'job content does not match'
+
+        job1 = digits.webapp.scheduler.get_job(job1_id)
+        job2 = digits.webapp.scheduler.get_job(job2_id)
+
+        assert (job1.form_data == job2.form_data), 'form content does not match'
 
 class BaseTestCreated(BaseViewsTestWithModel):
     """
@@ -598,6 +694,28 @@ layer {
 }
 """
 
+    TORCH_NETWORK = \
+"""
+return function(p)
+    local croplen = 8, channels
+    if p.inputShape then channels=p.inputShape[1] else channels=1 end
+    local net = nn.Sequential()
+    net:add(nn.MulConstant(0.004))
+    net:add(nn.View(-1):setNumInputDims(3))  -- flatten
+    -- set all weights and biases to zero as this speeds learning up
+    -- for the type of problem we're trying to solve in this test
+    local linearLayer = nn.Linear(channels*croplen*croplen, 2)
+    linearLayer.weight:fill(0)
+    linearLayer.bias:fill(0)
+    net:add(linearLayer) -- c*croplen*croplen -> 2
+    return {
+        model = net,
+        loss = nn.MSECriterion(),
+        croplen = croplen
+    }
+end
+"""
+
 class BaseTestCreatedCropInForm(BaseTestCreated):
     CROP_SIZE = 8
 
@@ -630,8 +748,12 @@ class TestTorchCreation(BaseTestCreation):
     FRAMEWORK = 'torch'
 
 class TestTorchCreated(BaseTestCreated):
-    LR_POLICY = 'fixed'
-    TRAIN_EPOCHS = 10
+    FRAMEWORK = 'torch'
+
+class TestTorchCreatedCropInNetwork(BaseTestCreatedCropInNetwork):
+    FRAMEWORK = 'torch'
+
+class TestTorchCreatedCropInForm(BaseTestCreatedCropInForm):
     FRAMEWORK = 'torch'
 
 class TestTorchDatasetModelInteractions(BaseTestDatasetModelInteractions):

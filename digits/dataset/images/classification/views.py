@@ -5,6 +5,7 @@ import os
 import flask
 
 from digits import utils
+from digits.utils.forms import fill_form_if_cloned, save_form_to_job
 from digits.utils.routing import request_wants_json, job_from_request
 from digits.webapp import app, scheduler, autodoc
 from digits.dataset import tasks
@@ -259,6 +260,10 @@ def image_classification_dataset_new():
     Returns a form for a new ImageClassificationDatasetJob
     """
     form = ImageClassificationDatasetForm()
+
+    ## Is there a request to clone a job with ?clone=<job_id>
+    fill_form_if_cloned(form)
+
     return flask.render_template('datasets/images/classification/new.html', form=form)
 
 @app.route(NAMESPACE + '.json', methods=['POST'])
@@ -271,6 +276,10 @@ def image_classification_dataset_create():
     Returns JSON when requested: {job_id,name,status} or {errors:[]}
     """
     form = ImageClassificationDatasetForm()
+
+    ## Is there a request to clone a job with ?clone=<job_id>
+    fill_form_if_cloned(form)
+
     if not form.validate_on_submit():
         if request_wants_json():
             return flask.jsonify({'errors': form.errors}), 400
@@ -297,6 +306,9 @@ def image_classification_dataset_create():
 
         else:
             raise ValueError('method not supported')
+
+        ## Save form data with the job so we can easily clone it later.
+        save_form_to_job(job, form)
 
         scheduler.add_job(job)
         if request_wants_json():
@@ -366,7 +378,7 @@ def image_classification_dataset_explore():
         task = job.val_db_task()
     elif 'test' in db.lower():
         task = job.test_db_task()
-    if task == None:
+    if task is None:
         raise ValueError('No create_db task for {0}'.format(db))
     if task.status != 'D':
         raise ValueError("This create_db task's status should be 'D' but is '{0}'".format(task.status))
@@ -403,11 +415,25 @@ def image_classification_dataset_explore():
             datum = caffe_pb2.Datum()
             datum.ParseFromString(value)
             if label is None or datum.label == label:
-                s = StringIO()
-                s.write(datum.data)
-                s.seek(0)
-                img = PIL.Image.open(s)
-                imgs.append({"label":labels[datum.label], "b64": utils.image.image_to_base64(img)})
+                if datum.encoded:
+                    s = StringIO()
+                    s.write(datum.data)
+                    s.seek(0)
+                    img = PIL.Image.open(s)
+                else:
+                    import caffe.io
+                    arr = caffe.io.datum_to_array(datum)
+                    # CHW -> HWC
+                    arr = arr.transpose((1,2,0))
+                    if arr.shape[2] == 1:
+                        # HWC -> HW
+                        arr = arr[:,:,0]
+                    elif arr.shape[2] == 3:
+                        # BGR -> RGB
+                        # XXX see issue #59
+                        arr = arr[:,:,[2,1,0]]
+                    img = PIL.Image.fromarray(arr)
+                imgs.append({"label":labels[datum.label], "b64": utils.image.embed_image_html(img)})
         if label is None:
             count += 1
         else:

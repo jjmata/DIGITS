@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 # Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
 
 import sys
@@ -264,7 +264,7 @@ def create_db(input_file, output_dir,
     write_queue = Queue.Queue(2*batch_size)
     summary_queue = Queue.Queue()
 
-    for i in xrange(num_threads):
+    for _ in xrange(num_threads):
         p = threading.Thread(target=_load_thread,
                 args=(load_queue, write_queue, summary_queue,
                     image_width, image_height, image_channels,
@@ -741,6 +741,7 @@ if __name__ == '__main__':
             help = 'The initial map size for LMDB (in MB)')
     parser.add_argument('--hdf5_dset_limit',
             type=int,
+            default=2**31,
             help = 'The size limit for HDF5 datasets')
 
     args = vars(parser.parse_args())

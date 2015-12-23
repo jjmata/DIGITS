@@ -55,12 +55,12 @@ local function inception(input_size, config)
    return concat
 end
 
-function createModel(nGPU)
+function createModel(nGPU, nChannels, nClasses)
    -- batch normalization added on top of convolutional layers in feature branch
    -- in order to help the network learn faster
    local features = nn.Sequential()
    features:add(nn.MulConstant(0.02))
-   features:add(convLayer(3,64,7,7,2,2,3,3)):add(nn.SpatialBatchNormalization(64,1e-3)):add(backend.ReLU(true))
+   features:add(convLayer(nChannels,64,7,7,2,2,3,3)):add(nn.SpatialBatchNormalization(64,1e-3)):add(backend.ReLU(true))
    features:add(backend.SpatialMaxPooling(3,3,2,2):ceil())
    features:add(convLayer(64,64,1,1)):add(nn.SpatialBatchNormalization(64,1e-3)):add(backend.ReLU(true))
    features:add(convLayer(64,192,3,3,1,1,1,1)):add(nn.SpatialBatchNormalization(192,1e-3)):add(backend.ReLU(true))
@@ -81,7 +81,7 @@ function createModel(nGPU)
    main_branch:add(inception(1024, {{352},{192,320},{192,224},{'max',128}})) -- 5(b)
    main_branch:add(backend.SpatialAveragePooling(7,7,1,1))
    main_branch:add(nn.View(1024):setNumInputDims(3))
-   main_branch:add(nn.Linear(1024,1000))
+   main_branch:add(nn.Linear(1024,nClasses))
    main_branch:add(nn.LogSoftMax())
 
    -- add auxillary classifier here (thanks to Christian Szegedy for the details)
@@ -93,7 +93,7 @@ function createModel(nGPU)
    aux_classifier:add(nn.View(128*4*4):setNumInputDims(3))
    aux_classifier:add(nn.Linear(128*4*4,768))
    aux_classifier:add(nn.ReLU())
-   aux_classifier:add(nn.Linear(768,1000))
+   aux_classifier:add(nn.Linear(768,nClasses))
    aux_classifier:add(nn.LogSoftMax())
 
    local splitter = nn.Concat(2)
@@ -119,8 +119,17 @@ end
 -- return function that returns network definition
 return function(params)
     assert(params.ngpus<=1, 'Model supports only one GPU')
+    -- get number of classes from external parameters
+    local nclasses = params.nclasses or 1
+    -- adjust to number of channels in input images
+    local channels = 1
+    -- params.inputShape may be nil during visualization
+    if params.inputShape then
+        channels = params.inputShape[1]
+        assert(params.inputShape[2]==256 and params.inputShape[3]==256, 'Network expects 256x256 images')
+    end
     return {
-        model = createModel(1),
+        model = createModel(1, channels, nclasses),
         croplen = 224,
         trainBatchSize = 24,
         validationBatchSize = 24,

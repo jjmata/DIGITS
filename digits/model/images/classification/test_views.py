@@ -9,6 +9,7 @@ import time
 import unittest
 import itertools
 import urllib
+import tempfile
 
 import mock
 import flask
@@ -66,12 +67,21 @@ layer {
 
     TORCH_NETWORK = \
 """
-require 'nn'
-local model = nn.Sequential()
-model:add(nn.View(-1):setNumInputDims(3)) -- 10*10*3 -> 300
-model:add(nn.Linear(300, 3))
-model:add(nn.LogSoftMax())
-return function(params)
+return function(p)
+    -- adjust to number of classes
+    local nclasses = p.nclasses or 1
+    -- model should adjust to any 3D input
+    local nDim = 1
+    if p.inputShape then p.inputShape:apply(function(x) nDim=nDim*x end) end
+    local model = nn.Sequential()
+    model:add(nn.View(-1):setNumInputDims(3)) -- c*h*w -> chw (flattened)
+    -- set all weights and biases to zero as this speeds learning up
+    -- for the type of problem we're trying to solve in this test
+    local linearLayer = nn.Linear(nDim, nclasses)
+    linearLayer.weight:fill(0)
+    linearLayer.bias:fill(0)
+    model:add(linearLayer) -- chw -> nclasses
+    model:add(nn.LogSoftMax())
     return {
         model = model
     }
@@ -318,6 +328,47 @@ class BaseTestCreation(BaseViewsTestWithDataset):
         job_id = self.create_model(select_gpus_list=','.join(gpu_list), batch_size=len(gpu_list))
         assert self.model_wait_completion(job_id) == 'Done', 'create failed'
 
+    def classify_one_for_job(self, job_id, test_misclassification = True):
+        # carry out one inference test per category in dataset
+        for category in self.imageset_paths.keys():
+            image_path = self.imageset_paths[category][0]
+            image_path = os.path.join(self.imageset_folder, image_path)
+            with open(image_path,'rb') as infile:
+                # StringIO wrapping is needed to simulate POST file upload.
+                image_upload = (StringIO(infile.read()), 'image.png')
+
+            rv = self.app.post(
+                    '/models/images/classification/classify_one?job_id=%s' % job_id,
+                    data = {
+                        'image_file': image_upload,
+                        }
+                    )
+            s = BeautifulSoup(rv.data, 'html.parser')
+            body = s.select('body')
+            assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
+            # gets an array of arrays [[confidence, label],...]
+            predictions = [p.get_text().split() for p in s.select('ul.list-group li')]
+            if test_misclassification:
+                assert predictions[0][1] == category, 'image misclassified'
+
+    def test_classify_one_mean_image(self):
+        # test the creation
+        job_id = self.create_model(use_mean = 'image')
+        assert self.model_wait_completion(job_id) == 'Done', 'job failed'
+        self.classify_one_for_job(job_id)
+
+    def test_classify_one_mean_pixel(self):
+        # test the creation
+        job_id = self.create_model(use_mean = 'pixel')
+        assert self.model_wait_completion(job_id) == 'Done', 'job failed'
+        self.classify_one_for_job(job_id)
+
+    def test_classify_one_mean_none(self):
+        # test the creation
+        job_id = self.create_model(use_mean = 'none')
+        assert self.model_wait_completion(job_id) == 'Done', 'job failed'
+        self.classify_one_for_job(job_id, False)
+
     def test_retrain(self):
         job1_id = self.create_model()
         assert self.model_wait_completion(job1_id) == 'Done', 'first job failed'
@@ -387,8 +438,56 @@ class BaseTestCreation(BaseViewsTestWithDataset):
         job_id = self.create_model(json=True, network=bogus_net)
         assert self.model_wait_completion(job_id) == 'Error', 'job should have failed'
         job_info = self.job_info_html(job_id=job_id, job_type='models')
-        assert 'BogusCode' in job_info
+        assert 'BogusCode' in job_info, "job_info: \n%s" % str(job_info)
 
+    def test_clone(self):
+        options_1 = {
+            'shuffle': True,
+            'snapshot_interval': 2.0,
+            'lr_step_size': 33.0,
+            'lr_inv_power': 0.5,
+            'lr_inv_gamma': 0.1,
+            'lr_poly_power': 3.0,
+            'lr_exp_gamma': 0.9,
+            'use_mean': 'image',
+            'lr_multistep_gamma': 0.5,
+            'lr_policy': 'exp',
+            'val_interval': 3.0,
+            'random_seed': 123,
+            'learning_rate': 0.0125,
+            'lr_step_gamma': 0.1,
+            'lr_sigmoid_step': 50.0,
+            'lr_sigmoid_gamma': 0.1,
+            'lr_multistep_values': '50,85',
+        }
+
+        job1_id = self.create_model(**options_1)
+        assert self.model_wait_completion(job1_id) == 'Done', 'first job failed'
+        rv = self.app.get('/models/%s.json' % job1_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content1 = json.loads(rv.data)
+
+        ## Clone job1 as job2
+        options_2 = {
+            'clone': job1_id,
+        }
+
+        job2_id = self.create_model(**options_2)
+        assert self.model_wait_completion(job2_id) == 'Done', 'second job failed'
+        rv = self.app.get('/models/%s.json' % job2_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content2 = json.loads(rv.data)
+
+        ## These will be different
+        content1.pop('id')
+        content2.pop('id')
+        content1.pop('directory')
+        content2.pop('directory')
+        assert (content1 == content2), 'job content does not match'
+
+        job1 = digits.webapp.scheduler.get_job(job1_id)
+        job2 = digits.webapp.scheduler.get_job(job2_id)
+        assert (job1.form_data == job2.form_data), 'form content does not match'
 
 class BaseTestCreated(BaseViewsTestWithModel):
     """
@@ -700,6 +799,25 @@ layer {
     }
 }
 """
+    TORCH_NETWORK = \
+"""
+return function(p)
+    local nclasses = p.nclasses or 1
+    local croplen = 8, channels
+    if p.inputShape then channels=p.inputShape[1] else channels=1 end
+    local model = nn.Sequential()
+    model:add(nn.View(-1):setNumInputDims(3)) -- flatten
+    local linLayer = nn.Linear(channels*croplen*croplen, nclasses)
+    linLayer.weight:fill(0)
+    linLayer.bias:fill(0)
+    model:add(linLayer) -- chw -> nclasses
+    model:add(nn.LogSoftMax())
+    return {
+        model = model,
+        croplen = croplen
+    }
+end
+"""
 
 ################################################################################
 # Test classes
@@ -737,7 +855,10 @@ class TestTorchCreation(BaseTestCreation):
 
 class TestTorchCreated(BaseTestCreated):
     FRAMEWORK = 'torch'
-    TRAIN_EPOCHS = 10
+
+class TestTorchCreatedUnencoded(BaseTestCreated):
+    FRAMEWORK = 'torch'
+    ENCODING = 'none'
 
 class TestTorchCreatedShuffle(TestTorchCreated):
     SHUFFLE = True
@@ -761,6 +882,18 @@ class TestCaffeLeNet(TestCaffeCreated):
                 'standard-networks', 'caffe', 'lenet.prototxt')
             ).read()
 
+class TestTorchCreatedCropInForm(BaseTestCreatedCropInForm):
+    FRAMEWORK = 'torch'
+
+class TestTorchCreatedCropInNetwork(BaseTestCreatedCropInNetwork):
+    FRAMEWORK = 'torch'
+
+class TestTorchCreatedWide(BaseTestCreatedWide):
+    FRAMEWORK = 'torch'
+
+class TestTorchCreatedTall(BaseTestCreatedTall):
+    FRAMEWORK = 'torch'
+
 class TestTorchLeNet(TestTorchCreated):
     IMAGE_WIDTH = 28
     IMAGE_HEIGHT = 28
@@ -770,10 +903,12 @@ class TestTorchLeNet(TestTorchCreated):
     LR_POLICY = 'fixed'
     LEARNING_RATE = 0.1
 
+    # standard lenet model will adjust to color
+    # or grayscale images
     TORCH_NETWORK=open(
             os.path.join(
                 os.path.dirname(digits.__file__),
-                'standard-networks', 'torch', 'lenet-color.lua')
+                'standard-networks', 'torch', 'lenet.lua')
             ).read()
 
 class TestTorchLeNetShuffle(TestTorchLeNet):
@@ -785,3 +920,93 @@ class TestTorchLeNetHdf5(TestTorchLeNet):
 class TestTorchLeNetHdf5Shuffle(TestTorchLeNetHdf5):
     SHUFFLE = True
 
+class TestPythonLayer(BaseViewsTestWithDataset):
+    FRAMEWORK = 'caffe'
+    CAFFE_NETWORK = """\
+layer {
+    name: "hidden"
+    type: 'InnerProduct'
+    inner_product_param {
+        num_output: 500
+        weight_filler {
+            type: "xavier"
+        }
+        bias_filler {
+             type: "constant"
+        }
+    }
+    bottom: "data"
+    top: "output"
+}
+layer {
+    name: "loss"
+    type: "SoftmaxWithLoss"
+    bottom: "output"
+    bottom: "label"
+    top: "loss"
+}
+layer {
+    name: "accuracy"
+    type: "Accuracy"
+    bottom: "output"
+    bottom: "label"
+    top: "accuracy"
+    include {
+        phase: TEST
+    }
+}
+layer {
+    name: "py_test"
+    type: "Python"
+    bottom: "output"
+    top: "py_test"
+    python_param {
+        module: "digits_python_layers"
+        layer: "PythonLayer"
+    }
+}
+
+"""
+    def write_python_layer_script(self, filename):
+        with open(filename, 'w') as f:
+            f.write("""\
+import caffe
+import numpy as np
+
+class PythonLayer(caffe.Layer):
+
+    def setup(self, bottom, top):
+        print 'PythonLayer::setup'
+        if len(bottom) != 1:
+            raise Exception("Need one input.")
+
+    def reshape(self, bottom, top):
+        print 'PythonLayer::reshape'
+        top[0].reshape(1)
+
+    def forward(self, bottom, top):
+        print 'PythonLayer::forward'
+        top[0].data[...] = np.sum(bottom[0].data) / 2. / bottom[0].num
+""")
+
+    ## This test makes a temporary python layer file whose path is set
+    ## as py_layer_server_file.  The job creation process copies that
+    ## file to the job_dir.  The CAFFE_NETWORK above, requires that
+    ## python script to be in the correct spot. If there is an error
+    ## in the script or if the script is named incorrectly, or does
+    ## not exist in the job_dir, then the test will fail.
+    def test_python_layer(self):
+        tmpdir = tempfile.mkdtemp()
+        py_file = tmpdir + '/py_test.py'
+        self.write_python_layer_script(py_file)
+
+        job_id = self.create_model(python_layer_server_file=py_file)
+
+        # remove the temporary python script.
+        shutil.rmtree(tmpdir)
+
+        assert self.model_wait_completion(job_id) == 'Done', 'first job failed'
+        rv = self.app.get('/models/%s.json' % job_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content = json.loads(rv.data)
+        assert len(content['snapshots']), 'should have at least snapshot'

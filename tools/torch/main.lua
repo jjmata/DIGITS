@@ -7,7 +7,6 @@ require 'pl'
 require 'trepl'
 require 'lfs'
 require 'nn'
-local threads = require 'threads'
 
 local dir_path = debug.getinfo(1,"S").source:match[[^@?(.*[\/])[^\/]-$]]
 if dir_path ~= nil then
@@ -40,7 +39,7 @@ Usage details:
 -p,--type (default cuda) float or cuda
 -r,--learningRate (default 0.001) learning rate
 -s,--save (default results) save directory
--t,--train (default train_db) location in which train db exists.
+-t,--train (default '') location in which train db exists. This parameter may be omitted only if visualizeModel is 'yes'.
 -v,--validation (default '') location in which validation db exists.
 -w,--weightDecay (default 1e-4) L2 penalty on the weights
 
@@ -55,11 +54,10 @@ Usage details:
 --lrpolicyState (default '') Specifies path to a lrpolicy state to reload from
 --networkDirectory (default '') directory in which network exists
 --mean (default '') mean image file.
---subtractMean (default yes) If yes, subtracts the mean from images
+--subtractMean (default 'image') Select mean subtraction method. Possible values are 'image', 'pixel' or 'none'.
 --labels (default '') file contains label definitions
 --snapshotPrefix (default '') prefix of the weights/snapshots
 --snapshotInterval (default 1) specifies the training epochs to be completed before taking a snapshot
---useMeanPixel (default 'no') by default pixel-wise subtraction is done using the full mean matrix. If this option is 'yes' then mean pixel will be used instead of mean matrix
 --visualizeModel (default 'no') Visualize model. If this options is set to 'yes' no model will be trained.
 
 -q,--policy (default torch_sgd) Learning Rate Policy. Valid policies : fixed, step, exp, inv, multistep, poly, sigmoid and torch_sgd. Note: when power value is -1, then "inv" policy with "gamma" is similar to "torch_sgd" with "learningRateDecay".
@@ -88,15 +86,18 @@ Usage details:
 --Almost all the required routines are already implemented. Below are some remaining tasks,
 -- 1) while recovering from crash, we should only consider the below options and discard all other inputs like epoch
 -- --retrain, --optimState, --randomState, --lrpolicyState, --networkDirectory, --network, --save, --train, --validation, --mean, --labels, --snapshotPrefix
--- 2) We should also save and restore some information like epoch, batch size, snapshot interval, subtractMean and useMeanPizel option, shuffle, mirror, crop, croplen
+-- 2) We should also save and restore some information like epoch, batch size, snapshot interval, subtractMean, shuffle, mirror, crop, croplen
 -- Precautions should be taken while restoring these options.
 -----------------------------------------------------------------------------------------------------------------------------
+
+COMPUTE_TRAIN_ACCURACY = false
+
+----------------------------------------------------------------------
+-- Initial parameter checks
 
 -- Convert boolean options
 opt.crop = opt.crop == 'yes' or false
 opt.mirror = opt.mirror == 'yes' or false
-opt.subtractMean = opt.subtractMean == 'yes' or false
-opt.useMeanPixel = opt.useMeanPixel == 'yes' or false
 opt.shuffle = opt.shuffle == 'yes' or false
 opt.visualizeModel = opt.visualizeModel == 'yes' or false
 
@@ -153,16 +154,6 @@ elseif opt.policy ~= 'torch_sgd' then
     os.exit(-1)
 end
 
-if opt.mean == '' and opt.subtractMean then
-    opt.subtractMean = false
-    logmessage.display(0,'subtractMean parameter is not considered as mean image path is unset')
-end
-
-if opt.useMeanPixel and opt.subtractMean then
-    opt.useMeanPixel = false
-    logmessage.display(0,'useMeanPixel parameter is not considered as subtractMean value is provided as "yes"')
-end
-
 if opt.retrain ~= '' and opt.weights ~= '' then
     logmessage.display(2,"Both '--retrain' and '--weights' options cannot be used at the same time.")
     os.exit(-1)
@@ -174,30 +165,128 @@ if opt.randomState ~= '' and opt.seed ~= '' then
 end
 
 torch.setnumthreads(opt.threads)
+
+----------------------------------------------------------------------
+-- Open Data sources:
+-- mean tensor,
+-- training database and optionally: labels,
+-- optionally: validation database and labels.
+
+local data = require 'data'
+
+local meanTensor
+if opt.subtractMean ~= 'none' then
+    assert(opt.mean ~= '', 'subtractMean parameter not set to "none" yet mean image path is unset')
+    logmessage.display(0,'Loading mean tensor from '.. opt.mean ..' file')
+    meanTensor = data.loadMean(opt.mean, opt.subtractMean == 'pixel')
+end
+
+local classes
+local confusion
+local validation_confusion
+
+if opt.labels ~= '' then
+    logmessage.display(0,'Loading label definitions from '.. opt.labels ..' file')
+    -- classes
+    classes = data.loadLabels(opt.labels)
+
+    if classes == nil then
+        logmessage.display(2,'labels file '.. opt.labels ..' not found')
+        os.exit(-1)
+    end
+
+    -- This matrix records the current confusion across classes
+    confusion = optim.ConfusionMatrix(classes)
+
+    -- separate validation matrix for validation data
+    validation_confusion = nil
+    if opt.validation ~= '' then
+        validation_confusion = optim.ConfusionMatrix(classes)
+    end
+
+    logmessage.display(0,'found ' .. #classes .. ' categories')
+end
+
+logmessage.display(0,'creating data readers')
+
+-- DataLoader objects take care of loading data from
+-- databases. Data loading and tensor manipulations
+-- (e.g. cropping, mean subtraction, mirroring) are
+-- performed from separate threads
+local trainDataLoader, trainSize, inputTensorShape
+local validationDataLoader, valSize
+
+if opt.train ~= '' then
+    -- create data loader for training dataset
+    trainDataLoader = DataLoader:new(4, -- num threads
+                                     package.path,
+                                     opt.dbbackend, opt.train, opt.train_labels,
+                                     opt.mirror, meanTensor,
+                                     true, -- train
+                                     opt.shuffle,
+                                     classes ~= nil -- whether this is a classification task
+                                     )
+    -- retrieve info from train DB (number of records and shape of input tensors)
+    trainSize, inputTensorShape = trainDataLoader:getInfo()
+    logmessage.display(0,'found ' .. trainSize .. ' images in train db' .. opt.train)
+    if opt.validation ~= '' then
+        local shape
+        validationDataLoader = DataLoader:new(4, -- num threads
+                                              package.path,
+                                              opt.dbbackend, opt.validation, opt.validation_labels,
+                                              false, -- no need to do random mirrorring
+                                              meanTensor,
+                                              false, -- train
+                                              false, -- shuffle
+                                              classes ~= nil -- whether this is a classification task
+                                              )
+        valSize, shape = validationDataLoader:getInfo()
+        logmessage.display(0,'found ' .. valSize .. ' images in train db' .. opt.validation)
+    end
+else
+    assert(opt.visualizeModel, 'Train DB should be specified')
+end
+
+-- update inputTensorShape if crop length specified
+-- this is necessary as the inputTensorShape is provided
+-- below to the user-defined function that defines the network
+if opt.crop and inputTensorShape then
+    inputTensorShape[2] = opt.croplen
+    inputTensorShape[3] = opt.croplen
+end
+
 ----------------------------------------------------------------------
 -- Model + Loss:
+-- this is where we retrieve the network definition
+-- from the user-defined function
 
 package.path = paths.concat(opt.networkDirectory, "?.lua") ..";".. package.path
 logmessage.display(0,'Loading network definition from ' .. paths.concat(opt.networkDirectory, opt.network))
--- retrieve network definition
 local network_func = require (opt.network)
 assert(type(network_func)=='function', "Network definition should return a Lua function - see documentation")
 local parameters = {
-        ngpus = (opt.type =='cuda') and 1 or 0
+        ngpus = (opt.type == 'cuda') and 1 or 0,
+        nclasses = (classes ~= nil) and #classes or nil,
+        inputShape = inputTensorShape,
     }
 network = network_func(parameters)
 local model = network.model
 
--- loss defaults to nn.ClassNLLCriterion() if unspecified
+-- if the loss criterion was not defined in the network
+-- use nn.ClassNLLCriterion() by default
 local loss = network.loss or nn.ClassNLLCriterion()
 
--- unless specified on command line, inherit croplen from network
+-- if the crop length was not defined on command line then
+-- check if the network defined a preferred crop length
 if not opt.crop and network.croplen then
     opt.crop = true
     opt.croplen = network.croplen
 end
 
--- unless specified on command line, inherit train and validation batch size from network
+-- if batch size was not specified on command line then check
+-- whether the network defined a preferred batch size (there
+-- can be separate batch sizes for the training and validation
+-- sets)
 local trainBatchSize
 local validationBatchSize
 if opt.batchSize==0 then
@@ -210,7 +299,8 @@ else
 end
 logmessage.display(0,'Train batch size is '.. trainBatchSize .. ' and validation batch size is ' .. validationBatchSize)
 
--- model visualization
+-- if we were instructed to print a visualization of the model,
+-- do it now and return immediately
 if opt.visualizeModel then
     logmessage.display(0,'Network definition:')
     print('\nModel: \n' .. model:__tostring())
@@ -219,37 +309,7 @@ if opt.visualizeModel then
     os.exit(-1)
 end
 
--- load
-local data = require 'data'
-
-local mean_t
-if opt.mean ~= '' then
-    logmessage.display(0,'Loading mean tensor from '.. opt.mean ..' file')
-    mean_t = data.loadMean(opt.mean, opt.useMeanPixel)
-end
-
-local classes
-if opt.labels ~= '' then
-    logmessage.display(0,'Loading label definitions from '.. opt.labels ..' file')
-    -- classes
-    classes = data.loadLabels(opt.labels)
-
-    if classes == nil then
-        logmessage.display(2,'labels file '.. opt.labels ..' not found')
-        os.exit(-1)
-    end
-
-    logmessage.display(0,'found ' .. #classes .. ' categories')
-
-    -- fix final output dimension of network
-    utils.correctFinalOutputDim(model, #classes)
-end
-
-logmessage.display(0,'Network definition: \n' .. model:__tostring__())
-logmessage.display(0,'Network definition ends')
-
 if opt.mirror then
-    --torch.manualSeed(os.time())
     logmessage.display(0,'mirror option was selected, so during training for some of the random images, mirror view will be considered instead of original image view')
 end
 
@@ -267,19 +327,6 @@ end
 
 ----------------------------------------------------------------------
 
-local confusion
-local validation_confusion
-if classes ~= nil then
-    -- This matrix records the current confusion across classes
-    confusion = optim.ConfusionMatrix(classes)
-
-    -- seperate validation matrix for validation data
-    validation_confusion = nil
-    if opt.validation ~= '' then
-        validation_confusion = optim.ConfusionMatrix(classes)
-    end
-end
-
 -- NOTE: currently retrain option wasn't used in DIGITS. This option was provided to be used from command line, if required.
 -- If preloading option is set, preload existing models appropriately
 if opt.retrain ~= '' then
@@ -291,6 +338,9 @@ if opt.retrain ~= '' then
         os.exit(-1)
     end
 end
+
+logmessage.display(0,'Network definition: \n' .. model:__tostring__())
+logmessage.display(0,'Network definition ends')
 
 if opt.type == 'float' then
     logmessage.display(0,'switching to floats')
@@ -326,77 +376,14 @@ if lfs.mkdir(paths.concat(opt.save)) then
     logmessage.display(0,'created a directory ' .. paths.concat(opt.save) .. ' to save all the snapshots')
 end
 
-logmessage.display(0,'creating worker threads')
--- create reader thread
-do
-    -- pass these variables through upvalue
-    local options = opt
-    local package_path = package.path
-    local classification = classes ~= nil
-
-    threadPool = threads.Threads(
-        1,
-        function(threadid)
-            -- inherit package path from main thread
-            package.path = package_path
-            require('data')
-            -- executes in reader thread, variables are local to this thread
-            db = DBSource:new(options.dbbackend, options.train, options.train_labels,
-                              options.mirror, options.crop,
-                              options.croplen, mean_t, options.subtractMean,
-                              true, -- train
-                              options.shuffle,
-                              classification -- whether this is a classification task
-                              )
-        end
-    )
-end
-
--- retrieve info from train DB
-local trainSize
-local imageSizeX
-local imageSizeY
-
-threadPool:addjob(
-               function()
-                   -- executes in reader thread, return values passed to
-                   -- main thread through following function
-                   return db:totalRecords(), db.ImageSizeX, db.ImageSizeY
-               end,
-               function(totalRecords, sizeX, sizeY)
-                   -- executes in main thread
-                   trainSize = totalRecords
-                   imageSizeX = sizeX
-                   imageSizeY = sizeY
-               end
-               )
-threadPool:synchronize()
-
-logmessage.display(0,'found ' .. trainSize .. ' images in train db' .. opt.train)
-
-local val, valSize
-
-if opt.validation ~= '' then
-    val = DBSource:new(opt.dbbackend, opt.validation, opt.validation_labels,
-                       false, -- no need to do random mirrorring
-                       opt.crop, opt.croplen,
-                       mean_t, opt.subtractMean,
-                       false, -- train
-                       false, -- shuffle
-                       classes ~= nil -- whether this is a classification task
-                       )
-    valSize = val:totalRecords()
-    logmessage.display(0,'found ' .. valSize .. ' images in train db' .. opt.validation)
-end
-
 -- validate "crop length" input parameter
-if opt.crop then
-    if opt.croplen > imageSizeY then
-        logmessage.display(2,'invalid crop length! crop length ' .. opt.croplen .. ' is less than image width ' .. imageSizeY)
-        os.exit(-1)
-    elseif opt.croplen > imageSizeX then
-        logmessage.display(2,'invalid crop length! crop length ' .. opt.croplen .. ' is less than image height ' .. imageSizeX)
-        os.exit(-1)
+if opt.crop and inputTensorShape then
+    -- make sure crop length is not bigger than image height or width
+    opt.croplen = math.min(opt.croplen, inputTensorShape[2], inputTensorShape[3])
+    -- set crop length in data readers
+    trainDataLoader:setCropLen(opt.croplen)
+    if validationDataLoader then
+        validationDataLoader:setCropLen(opt.croplen)
     end
 end
 
@@ -507,7 +494,7 @@ local optimizer = Optimizer{
     OptFunction = _G.optim[opt.optimization],
     OptState = optimState,
     Parameters = {Weights, Gradients},
-    HookFunction = updateConfusion,
+    HookFunction = COMPUTE_TRAIN_ACCURACY and updateConfusion or nil,
     lrPolicy = lrpolicy,
     LabelFunction = network.labelHook or function (input,dblabel) return dblabel end,
 }
@@ -588,58 +575,66 @@ local function backupforrecovery(backup_epoch)
     logmessage.display(0,'lrpolicy state saved - ' .. filename)
 end
 
--- send reader thread a request to load a batch from the training DB
-local function launchDataLoad(threadPool, dataLen, dataTable, reset)
-    threadPool:addjob(
-                function()
-                    -- executes in reader thread
-                    if reset == true then
-                        db:reset()
-                    end
-                    return db:nextBatch(dataLen)
-                end,
-                function(inputs, targets)
-                    -- executes in main thread
-                    dataTable.inputs = inputs
-                    dataTable.outputs = targets
-                end
-            )
-end
 
 -- Validation function
-local function Validation()
+local function Validation(dataLoader, nn_model, epoch)
 
-    model:evaluate()
+    -- switch model to evaluation mode
+    nn_model:evaluate()
 
     local NumBatches = 0
     local loss_sum = 0
     local inputs, targets
+    local dataLoaderIdx = 1
+    local data = {}
 
-    for t = 1,valSize,validationBatchSize do
+    local t = 1
+    while t <= valSize do
 
         -- create mini batch
         NumBatches = NumBatches + 1
 
-        inputs,targets = val:nextBatch(math.min(valSize-t+1,validationBatchSize))
+        while dataLoader:acceptsjob() do
+            local dataBatchSize = math.min(valSize-dataLoaderIdx+1,validationBatchSize)
+            if dataBatchSize > 0 then
+                dataLoader:scheduleNextBatch(dataBatchSize, dataLoaderIdx, data, true)
+                dataLoaderIdx = dataLoaderIdx + dataBatchSize
+            else break end
+        end
 
-        if opt.type =='cuda' then
-            inputs=inputs:cuda()
-            targets = targets:cuda()
+        -- wait for next data loader job to complete
+        dataLoader:waitNext()
+
+        -- get data from last load job
+        local thisBatchSize = data.batchSize
+        inputs = data.inputs
+        targets = data.outputs
+
+        if inputs then
+            if opt.type =='cuda' then
+                inputs=inputs:cuda()
+                targets = targets:cuda()
+            else
+                inputs=inputs:float()
+                targets = targets:float()
+            end
+
+            local y = model:forward(inputs)
+            local labels = network.labelHook and network.labelHook(inputs, targets) or targets
+            local err = loss:forward(y,labels)
+            loss_sum = loss_sum + err
+            if validation_confusion then
+                validation_confusion:batchAdd(y,labels)
+            end
+
+            if math.fmod(NumBatches,50)==0 then
+                collectgarbage()
+            end
+
+            t = t + thisBatchSize
         else
-            inputs=inputs:float()
-            targets = targets:float()
-        end
-
-        local y = model:forward(inputs)
-        local labels = network.labelHook and network.labelHook(inputs, targets) or targets
-        local err = loss:forward(y,labels)
-        loss_sum = loss_sum + err
-        if validation_confusion then
-            validation_confusion:batchAdd(y,labels)
-        end
-
-        if math.fmod(NumBatches,50)==0 then
-            collectgarbage()
+            -- failed to read from database (possibly due to disabled thread)
+            dataLoaderIdx = dataLoaderIdx - data.batchSize
         end
     end
 
@@ -649,7 +644,7 @@ local function Validation()
 end
 
 -- Train function
-local function Train(epoch, threadPool)
+local function Train(epoch, dataLoader)
 
     model:training()
 
@@ -660,104 +655,107 @@ local function Train(epoch, threadPool)
     local learningrate = 0
     local inputs, targets
 
+    local dataLoaderIdx = 1
+
     local data = {}
 
-    for t = 1,trainSize,trainBatchSize do
+    local t = 1
+    while t <= trainSize do
 
-        NumBatches = NumBatches + 1
-        local thisBatchSize = math.min(trainSize-t+1,trainBatchSize)
-
-        local a = torch.Timer()
-        local m = a:time().real
-
-        -- on first iteration, kick off initial data load job
-        if t==1 then
-            launchDataLoad(threadPool, thisBatchSize, data, true)
+        while dataLoader:acceptsjob() do
+            local dataBatchSize = math.min(trainSize-dataLoaderIdx+1,trainBatchSize)
+            if dataBatchSize > 0 then
+                dataLoader:scheduleNextBatch(dataBatchSize, dataLoaderIdx, data, true)
+                dataLoaderIdx = dataLoaderIdx + dataBatchSize
+            else break end
         end
 
-        -- wait for previous load job to complete
-        threadPool:synchronize()
+        NumBatches = NumBatches + 1
+
+        -- wait for next data loader job to complete
+        dataLoader:waitNext()
 
         -- get data from last load job
+        local thisBatchSize = data.batchSize
         inputs = data.inputs
         targets = data.outputs
 
-        -- kick off next data load job
-        nextBatchSize = math.min(trainSize-thisBatchSize-t+1,trainBatchSize)
-        if nextBatchSize>0 then
-            launchDataLoad(threadPool, nextBatchSize, data, false)
-        end
+        if inputs then
+            --[=[
+            -- print some statistics, show input in iTorch
 
-        --[=[
-        -- print some statistics, show input in iTorch
-
-        if t%1024==1 then
-            print(string.format("input mean=%f std=%f",inputs:mean(),inputs:std()))
-            for idx=1,thisBatchSize do
-                print(classes[targets[idx]])
+            if t%1024==1 then
+                print(string.format("input mean=%f std=%f",inputs:mean(),inputs:std()))
+                for idx=1,thisBatchSize do
+                    print(classes[targets[idx]])
+                end
+                if itorch then
+                    itorch.image(inputs)
+                end
             end
-            if itorch then
-                itorch.image(inputs)
-            end
-        end
-        --]=]
+            --]=]
 
-        if opt.type =='cuda' then
-            inputs = inputs:cuda()
-            targets = targets:cuda()
-        else
-            inputs = inputs:float()
-        end
-
-        _,learningrate,_,trainerr = optimizer:optimize(inputs, targets)
-
-        -- adding the loss values of each mini batch and also maintaining the counter for number of batches, so that average loss value can be found at the time of logging details
-        loss_sum = loss_sum + trainerr[1]
-        loss_batches_cnt = loss_batches_cnt + 1
-
-        if math.fmod(NumBatches,50)==0 then
-            collectgarbage()
-        end
-
-        local current_epoch = (epoch-1)+utils.round((math.min(t+trainBatchSize-1,trainSize))/trainSize, epoch_round)
-
-        -- log details on first iteration, or when required number of images are processed
-        curr_images_cnt = curr_images_cnt + thisBatchSize
-        if (epoch==1 and t==1) or curr_images_cnt >= logging_check then
-            logmessage.display(0, 'Training (epoch ' .. current_epoch .. '): loss = ' .. (loss_sum/loss_batches_cnt) .. ', lr = ' .. learningrate)
-            curr_images_cnt = 0 -- For accurate values we may assign curr_images_cnt % logging_check to curr_images_cnt, instead of 0
-            loss_sum = 0
-            loss_batches_cnt = 0
-        end
-
-        if opt.validation ~= '' and current_epoch >= next_validation then
-            if validation_confusion ~= nil then
-                validation_confusion:zero()
-            end
-            val:reset()
-            local avg_loss=Validation()
-            -- log details at the end of validation
-            if validation_confusion ~= nil then
-                validation_confusion:updateValids()
-                logmessage.display(0, 'Validation (epoch ' .. current_epoch .. '): loss = ' .. avg_loss .. ', accuracy = ' .. validation_confusion.totalValid)
+            if opt.type =='cuda' then
+                inputs = inputs:cuda()
+                targets = targets:cuda()
             else
-                logmessage.display(0, 'Validation (epoch ' .. current_epoch .. '): loss = ' .. avg_loss )
+                inputs = inputs:float()
             end
 
-            next_validation = (utils.round(current_epoch/opt.interval) + 1) * opt.interval -- To find next nearest epoch value that exactly divisible by opt.interval
-            last_validation_epoch = current_epoch
-            model:training() -- to reset model to training
-        end
+            _,learningrate,_,trainerr = optimizer:optimize(inputs, targets)
 
-        if current_epoch >= next_snapshot_save then
-            -- save weights
-            local filename = paths.concat(opt.save, snapshot_prefix .. '_' .. current_epoch .. '_Weights.t7')
-            logmessage.display(0,'Snapshotting to ' .. filename)
-            torch.save(filename, Weights)
-            logmessage.display(0,'Snapshot saved - ' .. filename)
+            -- adding the loss values of each mini batch and also maintaining the counter for number of batches, so that average loss value can be found at the time of logging details
+            loss_sum = loss_sum + trainerr[1]
+            loss_batches_cnt = loss_batches_cnt + 1
 
-            next_snapshot_save = (utils.round(current_epoch/opt.snapshotInterval) + 1) * opt.snapshotInterval -- To find next nearest epoch value that exactly divisible by opt.snapshotInterval
-            last_snapshot_save_epoch = current_epoch
+            if math.fmod(NumBatches,50)==0 then
+                collectgarbage()
+            end
+
+            local current_epoch = (epoch-1)+utils.round((math.min(t+trainBatchSize-1,trainSize))/trainSize, epoch_round)
+
+            -- log details on first iteration, or when required number of images are processed
+            curr_images_cnt = curr_images_cnt + thisBatchSize
+            if (epoch==1 and t==1) or curr_images_cnt >= logging_check then
+                logmessage.display(0, 'Training (epoch ' .. current_epoch .. '): loss = ' .. (loss_sum/loss_batches_cnt) .. ', lr = ' .. learningrate)
+                curr_images_cnt = 0 -- For accurate values we may assign curr_images_cnt % logging_check to curr_images_cnt, instead of 0
+                loss_sum = 0
+                loss_batches_cnt = 0
+            end
+
+            if opt.validation ~= '' and current_epoch >= next_validation then
+                if validation_confusion ~= nil then
+                    validation_confusion:zero()
+                end
+                local avg_loss=Validation(validationDataLoader, model, current_epoch)
+                 -- log details at the end of validation
+                if validation_confusion ~= nil then
+                    validation_confusion:updateValids()
+                    logmessage.display(0, 'Validation (epoch ' .. current_epoch .. '): loss = ' .. avg_loss .. ', accuracy = ' .. validation_confusion.totalValid)
+                else
+                    logmessage.display(0, 'Validation (epoch ' .. current_epoch .. '): loss = ' .. avg_loss )
+                end
+
+                next_validation = (utils.round(current_epoch/opt.interval) + 1) * opt.interval -- To find next nearest epoch value that exactly divisible by opt.interval
+                last_validation_epoch = current_epoch
+                model:training() -- to reset model to training
+            end
+
+            if current_epoch >= next_snapshot_save then
+                -- save weights
+                local filename = paths.concat(opt.save, snapshot_prefix .. '_' .. current_epoch .. '_Weights.t7')
+                logmessage.display(0,'Snapshotting to ' .. filename)
+                torch.save(filename, Weights)
+                logmessage.display(0,'Snapshot saved - ' .. filename)
+
+                next_snapshot_save = (utils.round(current_epoch/opt.snapshotInterval) + 1) * opt.snapshotInterval -- To find next nearest epoch value that exactly divisible by opt.snapshotInterval
+                last_snapshot_save_epoch = current_epoch
+            end
+
+            t = t + thisBatchSize
+        else
+            -- failed to read from database (possibly due to disabled thread)
+            dataLoaderIdx = dataLoaderIdx - data.batchSize
         end
 
     end
@@ -778,8 +776,7 @@ if opt.validation ~= '' then
     if validation_confusion ~= nil then
         validation_confusion:zero()
     end
-    val:reset()
-    local avg_loss=Validation()
+    local avg_loss=Validation(validationDataLoader, model, 0)
     -- log details at the end of validation
     if validation_confusion ~= nil then
         validation_confusion:updateValids()
@@ -795,7 +792,7 @@ while epoch<=opt.epoch do
     if confusion ~= nil then
         confusion:zero()
     end
-    Train(epoch, threadPool)
+    Train(epoch, trainDataLoader)
     if confusion ~= nil then
         confusion:updateValids()
         --print(confusion)
@@ -809,8 +806,7 @@ if opt.validation ~= '' and opt.epoch > last_validation_epoch then
     if validation_confusion ~= nil then
         validation_confusion:zero()
     end
-    val:reset()
-    local avg_loss=Validation()
+    local avg_loss=Validation(validationDataLoader, model, opt.epoch)
     -- log details at the end of validation
     if validation_confusion ~= nil then
         validation_confusion:updateValids()
@@ -828,14 +824,11 @@ if opt.epoch > last_snapshot_save_epoch then
     logmessage.display(0,'Snapshot saved - ' .. filename)
 end
 
--- close train database
-threadPool:addjob(
-            function()
-                db:close()
-            end
-        )
-
+-- close databases
+trainDataLoader:close()
 if opt.validation ~= '' then
-    val:close()
+    validationDataLoader:close()
 end
 
+-- enforce clean exit
+os.exit(0)

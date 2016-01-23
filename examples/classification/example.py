@@ -16,6 +16,12 @@ import numpy as np
 import PIL.Image
 import scipy.misc
 
+import sys
+# Add path for DIGITS package
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import digits.config
+digits.config.load_config()
+
 os.environ['GLOG_minloglevel'] = '2' # Suppress most caffe output
 import caffe
 from caffe.proto import caffe_pb2
@@ -106,7 +112,7 @@ def load_image(path, height, width, mode='RGB'):
     image = scipy.misc.imresize(image, (height, width), 'bilinear')
     return image
 
-def forward_pass(images, net, transformer, batch_size=1):
+def forward_pass(images, net, transformer, batch_size=25):
     """
     Returns scores for each image as an np.ndarray (nImages x nClasses)
 

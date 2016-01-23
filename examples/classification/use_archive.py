@@ -89,7 +89,12 @@ if __name__ == '__main__':
 
     args = vars(parser.parse_args())
 
-    image_files = [args['image']]
+    # use image file or directory of images as per @michaelholm-ce
+    im_path = args['image']
+    if os.path.isdir(im_path):
+        image_files = [os.path.join(im_path,f) for f in os.listdir(im_path)]
+    elif os.path.isfile(im_path):
+        image_files = [im_path]
 
     classify_with_archive(args['archive'], image_files, not args['nogpu'])
 

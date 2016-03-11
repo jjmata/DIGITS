@@ -1,15 +1,15 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import os
-import math
-import locale
-from random import uniform
-from urlparse import urlparse
-from io import BlockingIOError
 import inspect
+from io import BlockingIOError
+import locale
+import math
+import os
 import pkg_resources
 import platform
-
+from random import uniform
+from urlparse import urlparse
 
 if not platform.system() == 'Windows':
     import fcntl
@@ -154,5 +154,5 @@ def parse_version(*args):
 
 ### Import the other utility functions
 
-from . import constants, image, time_filters, errors, forms
+from . import constants, image, time_filters, errors, forms, routing, auth
 

@@ -1,23 +1,27 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
+import itertools
 import json
 import os
 import shutil
 import tempfile
 import time
 import unittest
-import itertools
 import urllib
 
-from gevent import monkey
-monkey.patch_all()
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
 from bs4 import BeautifulSoup
 import PIL.Image
 from urlparse import urlparse
-from cStringIO import StringIO
 
+from .test_lmdb_creator import create_lmdbs
 import digits.test_views
-from test_lmdb_creator import create_lmdbs
 
 # May be too short on a slow system
 TIMEOUT_DATASET = 45
@@ -113,9 +117,10 @@ class BaseViewsTestWithImageset(BaseViewsTest):
             s = BeautifulSoup(rv.data, 'html.parser')
             div = s.select('div.alert-danger')
             if div:
-                raise RuntimeError(div[0])
+                print div[0]
             else:
-                raise RuntimeError('Failed to create dataset')
+                print rv.data
+            raise RuntimeError('Failed to create dataset - status %s' % rv.status_code)
 
         job_id = cls.job_id_from_response(rv)
 

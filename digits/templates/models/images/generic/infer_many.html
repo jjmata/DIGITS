@@ -1,25 +1,36 @@
-{# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved. #}
-{% extends "layout.html" %}
+{# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved. #}
+{% extends "job.html" %}
 
 {% block nav %}
-<li><a href="{{url_for('models_show', job_id=job.id())}}">{{job.name()}}</a></li>
+<li><a href="{{url_for('digits.model.views.show', job_id=model_job.id())}}">{{model_job.name()}}</a></li>
 <li class="active"><a>Test Many</a></li>
 {% endblock %}
 
-{% block content %}
+{% block job_content %}
 
 <div class="page-header">
     <h1>
-        {{job.name()}}
+        {{model_job.name()}}
         <small>
             {{job.job_type()}}
         </small>
     </h1>
 </div>
 
+{% if not network_outputs %}
+<div class="alert alert-danger">
+    <p>Inference failed, see job log</p>
+</div>
+{% endif %}
 
+{% endblock %}
+
+{% block job_content_details %}
+
+{% if network_outputs %}
 <table class="table">
     <tr>
+        <td></td>
         <th>Image</th>
         {% for key in network_outputs.keys() %}
         <th>{{key}}</th>
@@ -27,6 +38,7 @@
     </tr>
     {% for path in paths %}
     <tr>
+        <td>{{loop.index}}</td>
         <td>{{path}}</td>
         {% set index=loop.index0 %}
         {% for key, val in network_outputs.iteritems() %}
@@ -35,6 +47,7 @@
     </tr>
     {% endfor %}
 </table>
+{% endif %}
 
 {% endblock %}
 

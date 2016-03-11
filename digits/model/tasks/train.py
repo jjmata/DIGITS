@@ -1,11 +1,12 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import time
-import os.path
 from collections import OrderedDict, namedtuple
+import os.path
+import time
 
-import gevent
 import flask
+import gevent
 
 from digits import device_query
 from digits.task import Task
@@ -522,8 +523,10 @@ class TrainTask(Task):
             return None
 
     # return id of framework used for training
-    @override
     def get_framework_id(self):
+        """
+        Returns a string
+        """
         return self.framework_id
 
     def get_model_files(self):

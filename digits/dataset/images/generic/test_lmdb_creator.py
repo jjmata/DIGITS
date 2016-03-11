@@ -1,20 +1,26 @@
 #!/usr/bin/env python2
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
 """
 Functions for creating temporary LMDBs
 Used in test_views
 """
+from __future__ import absolute_import
 
+import argparse
+from collections import defaultdict
 import os
 import sys
 import time
-import argparse
-from collections import defaultdict
-from cStringIO import StringIO
 
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
+import lmdb
 import numpy as np
 import PIL.Image
-import lmdb
 
 if __name__ == '__main__':
     dirname = os.path.dirname(os.path.realpath(__file__))

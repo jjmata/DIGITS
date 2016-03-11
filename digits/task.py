@@ -1,21 +1,21 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import os.path
-import re
-import time
 import logging
-import subprocess
+import os.path
+import platform
+import re
 import signal
+import subprocess
+import time
 
 import flask
 import gevent.event
 
 from . import utils
+from .config import config_value
+from .status import Status, StatusCls
 import digits.log
-from config import config_value
-from status import Status, StatusCls
-
-import platform
 
 # NOTE: Increment this everytime the pickled version changes
 PICKLE_VERSION = 1
@@ -76,12 +76,6 @@ class Task(StatusCls):
         """
         raise NotImplementedError
 
-    def get_framework_id(self):
-        """
-        Returns a string
-        """
-        raise NotImplementedError('Please implement me')
-
     def html_id(self):
         """
         Returns a string
@@ -133,8 +127,8 @@ class Task(StatusCls):
             path = filename
         else:
             path = os.path.join(self.job_dir, filename)
-        if relative:
-            path = os.path.relpath(path, config_value('jobs_dir'))
+            if relative:
+                path = os.path.relpath(path, config_value('jobs_dir'))
         return str(path).replace("\\","/")
 
     def ready_to_queue(self):
@@ -330,7 +324,7 @@ class Task(StatusCls):
 
     def emit_progress_update(self):
         """
-        Call socketio.emit for task progess update, and trigger job progress update.
+        Call socketio.emit for task progress update, and trigger job progress update.
         """
         from digits.webapp import socketio
         socketio.emit('task update',

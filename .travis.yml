@@ -1,4 +1,4 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
 
 sudo: required
 dist: precise
@@ -19,7 +19,6 @@ before_install:
     - export PATH=/home/travis/miniconda/bin:$PATH
 install:
     # Caffe
-    - pushd .
     - ./scripts/travis/install-caffe.sh $(pwd)/deps/caffe
 
     # Torch

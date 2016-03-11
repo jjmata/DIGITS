@@ -1,19 +1,21 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import flask
 
+from .forms import GenericImageDatasetForm
+from .job import GenericImageDatasetJob
+from digits import utils
+from digits.dataset import tasks
+from digits.webapp import app, scheduler
 from digits.utils.forms import fill_form_if_cloned, save_form_to_job
 from digits.utils.routing import request_wants_json, job_from_request
-from digits.webapp import app, scheduler, autodoc
-from digits.dataset import tasks
-from forms import GenericImageDatasetForm
-from job import GenericImageDatasetJob
 
-NAMESPACE = '/datasets/images/generic'
+blueprint = flask.Blueprint(__name__, __name__)
 
-@app.route(NAMESPACE + '/new', methods=['GET'])
-@autodoc('datasets')
-def generic_image_dataset_new():
+@blueprint.route('/new', methods=['GET'])
+@utils.auth.requires_login
+def new():
     """
     Returns a form for a new GenericImageDatasetJob
     """
@@ -24,10 +26,10 @@ def generic_image_dataset_new():
 
     return flask.render_template('datasets/images/generic/new.html', form=form)
 
-@app.route(NAMESPACE + '.json', methods=['POST'])
-@app.route(NAMESPACE, methods=['POST'])
-@autodoc(['datasets', 'api'])
-def generic_image_dataset_create():
+@blueprint.route('.json', methods=['POST'])
+@blueprint.route('', methods=['POST'], strict_slashes=False)
+@utils.auth.requires_login(redirect=False)
+def create():
     """
     Creates a new GenericImageDatasetJob
 
@@ -47,8 +49,9 @@ def generic_image_dataset_create():
     job = None
     try:
         job = GenericImageDatasetJob(
-                name = form.dataset_name.data,
-                mean_file = form.prebuilt_mean_file.data.strip(),
+                username    = utils.auth.get_username(),
+                name        = form.dataset_name.data,
+                mean_file   = form.prebuilt_mean_file.data.strip(),
                 )
 
         if form.method.data == 'prebuilt':
@@ -104,7 +107,7 @@ def generic_image_dataset_create():
         if request_wants_json():
             return flask.jsonify(job.json_dict())
         else:
-            return flask.redirect(flask.url_for('datasets_show', job_id=job.id()))
+            return flask.redirect(flask.url_for('digits.dataset.views.show', job_id=job.id()))
 
     except:
         if job:
@@ -117,9 +120,8 @@ def show(job):
     """
     return flask.render_template('datasets/images/generic/show.html', job=job)
 
-@app.route(NAMESPACE + '/summary', methods=['GET'])
-@autodoc('datasets')
-def generic_image_dataset_summary():
+@blueprint.route('/summary', methods=['GET'])
+def summary():
     """
     Return a short HTML summary of a DatasetJob
     """

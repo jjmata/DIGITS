@@ -1,31 +1,64 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import os
+import random
 import re
 import tempfile
-import random
+
 import flask
-import werkzeug.exceptions
 import numpy as np
+import werkzeug.exceptions
 
+from .forms import ImageClassificationModelForm
+from .job import ImageClassificationModelJob
 import digits
-from digits.config import config_value
-from digits import utils
-from digits.utils.routing import request_wants_json, job_from_request
-from digits.webapp import app, scheduler, autodoc
-from digits.dataset import ImageClassificationDatasetJob
 from digits import frameworks
-from forms import ImageClassificationModelForm
-from job import ImageClassificationModelJob
+from digits import utils
+from digits.config import config_value
+from digits.dataset import ImageClassificationDatasetJob
+from digits.inference import ImageInferenceJob
 from digits.status import Status
-from digits.utils.forms import fill_form_if_cloned, save_form_to_job
 from digits.utils import filesystem as fs
+from digits.utils.forms import fill_form_if_cloned, save_form_to_job
+from digits.utils.routing import request_wants_json, job_from_request
+from digits.webapp import app, scheduler
 
-NAMESPACE   = '/models/images/classification'
+blueprint = flask.Blueprint(__name__, __name__)
 
-@app.route(NAMESPACE + '/new', methods=['GET'])
-@autodoc('models')
-def image_classification_model_new():
+"""
+Read image list
+"""
+def read_image_list(image_list, image_folder, num_test_images):
+    paths = []
+    ground_truths = []
+
+    for line in image_list.readlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        # might contain a numerical label at the end
+        match = re.match(r'(.*\S)\s+(\d+)$', line)
+        if match:
+            path = match.group(1)
+            ground_truth = int(match.group(2))
+        else:
+            path = line
+            ground_truth = None
+
+        if not utils.is_url(path) and image_folder and not os.path.isabs(path):
+            path = os.path.join(image_folder, path)
+        paths.append(path)
+        ground_truths.append(ground_truth)
+
+        if num_test_images is not None and len(paths) >= num_test_images:
+            break
+    return paths, ground_truths
+
+@blueprint.route('/new', methods=['GET'])
+@utils.auth.requires_login
+def new():
     """
     Return a form for a new ImageClassificationModelJob
     """
@@ -48,10 +81,10 @@ def image_classification_model_new():
             multi_gpu = config_value('caffe_root')['multi_gpu'],
             )
 
-@app.route(NAMESPACE + '.json', methods=['POST'])
-@app.route(NAMESPACE, methods=['POST'])
-@autodoc(['models', 'api'])
-def image_classification_model_create():
+@blueprint.route('.json', methods=['POST'])
+@blueprint.route('', methods=['POST'], strict_slashes=False)
+@utils.auth.requires_login(redirect=False)
+def create():
     """
     Create a new ImageClassificationModelJob
 
@@ -88,6 +121,7 @@ def image_classification_model_create():
     job = None
     try:
         job = ImageClassificationModelJob(
+                username    = utils.auth.get_username(),
                 name        = form.model_name.data,
                 dataset_id  = datasetJob.id(),
                 )
@@ -113,7 +147,8 @@ def image_classification_model_create():
                 raise werkzeug.exceptions.BadRequest(
                         'Job not found: %s' % form.previous_networks.data)
 
-            network = fw.get_network_from_previous(old_job.train_task().network)
+            use_same_dataset = (old_job.dataset_id == job.dataset_id)
+            network = fw.get_network_from_previous(old_job.train_task().network, use_same_dataset)
 
             for choice in form.previous_networks.choices:
                 if choice[0] == form.previous_networks.data:
@@ -221,7 +256,7 @@ def image_classification_model_create():
         if request_wants_json():
             return flask.jsonify(job.json_dict())
         else:
-            return flask.redirect(flask.url_for('models_show', job_id=job.id()))
+            return flask.redirect(flask.url_for('digits.model.views.show', job_id=job.id()))
 
     except:
         if job:
@@ -234,9 +269,8 @@ def show(job):
     """
     return flask.render_template('models/images/classification/show.html', job=job, framework_ids = [fw.get_id() for fw in frameworks.get_frameworks()])
 
-@app.route(NAMESPACE + '/large_graph', methods=['GET'])
-@autodoc('models')
-def image_classification_model_large_graph():
+@blueprint.route('/large_graph', methods=['GET'])
+def large_graph():
     """
     Show the loss/accuracy graph, but bigger
     """
@@ -244,37 +278,25 @@ def image_classification_model_large_graph():
 
     return flask.render_template('models/images/classification/large_graph.html', job=job)
 
-@app.route(NAMESPACE + '/classify_one.json', methods=['POST'])
-@app.route(NAMESPACE + '/classify_one', methods=['POST', 'GET'])
-@autodoc(['models', 'api'])
-def image_classification_model_classify_one():
+@blueprint.route('/classify_one.json', methods=['POST'])
+@blueprint.route('/classify_one', methods=['POST', 'GET'])
+def classify_one():
     """
     Classify one image and return the top 5 classifications
 
     Returns JSON when requested: {predictions: {category: confidence,...}}
     """
-    job = job_from_request()
+    model_job = job_from_request()
 
-    image = None
     if 'image_url' in flask.request.form and flask.request.form['image_url']:
-        image = utils.image.load_image(flask.request.form['image_url'])
+        image_path = flask.request.form['image_url']
     elif 'image_file' in flask.request.files and flask.request.files['image_file']:
-        outfile = tempfile.mkstemp(suffix='.bin')
+        outfile = tempfile.mkstemp(suffix='.png')
         flask.request.files['image_file'].save(outfile[1])
-        image = utils.image.load_image(outfile[1])
+        image_path = outfile[1]
         os.close(outfile[0])
-        os.remove(outfile[1])
     else:
         raise werkzeug.exceptions.BadRequest('must provide image_url or image_file')
-
-    # resize image
-    db_task = job.train_task().dataset.train_db_task()
-    height = db_task.image_dims[0]
-    width = db_task.image_dims[1]
-    image = utils.image.resize_image(image, height, width,
-            channels = db_task.image_dims[2],
-            resize_mode = db_task.resize_mode,
-            )
 
     epoch = None
     if 'snapshot_epoch' in flask.request.form:
@@ -284,117 +306,214 @@ def image_classification_model_classify_one():
     if 'show_visualizations' in flask.request.form and flask.request.form['show_visualizations']:
         layers = 'all'
 
-    predictions, visualizations = None, None
-    predictions, visualizations = job.train_task().infer_one(image, snapshot_epoch=epoch, layers=layers)
+    # create inference job
+    inference_job = ImageInferenceJob(
+                username    = utils.auth.get_username(),
+                name        = "Classify One Image",
+                model       = model_job,
+                images      = [image_path],
+                epoch       = epoch,
+                layers      = layers
+                )
 
-    # take top 5
-    if predictions:
-        predictions = [(p[0], round(100.0*p[1],2)) for p in predictions[:5]]
+    # schedule tasks
+    scheduler.add_job(inference_job)
+
+    # wait for job to complete
+    inference_job.wait_completion()
+
+    # retrieve inference data
+    inputs, outputs, visualizations = inference_job.get_data()
+
+    # delete job
+    scheduler.delete_job(inference_job)
+
+    # remove file (fails silently if a URL was provided)
+    try:
+        os.remove(image_path)
+    except:
+        pass
+
+    image = None
+    predictions = []
+    if inputs is not None and len(inputs['data']) == 1:
+        image = utils.image.embed_image_html(inputs['data'][0])
+        # convert to class probabilities for viewing
+        last_output_name, last_output_data = outputs.items()[-1]
+
+        if len(last_output_data) == 1:
+            scores = last_output_data[0].flatten()
+            indices = (-scores).argsort()
+            labels = model_job.train_task().get_labels()
+            predictions = []
+            for i in indices:
+                predictions.append( (labels[i], scores[i]) )
+            predictions = [(p[0], round(100.0*p[1],2)) for p in predictions[:5]]
 
     if request_wants_json():
         return flask.jsonify({'predictions': predictions})
     else:
         return flask.render_template('models/images/classification/classify_one.html',
-                job             = job,
-                image_src       = utils.image.embed_image_html(image),
+                model_job       = model_job,
+                job             = inference_job,
+                image_src       = image,
                 predictions     = predictions,
                 visualizations  = visualizations,
                 total_parameters= sum(v['param_count'] for v in visualizations if v['vis_type'] == 'Weights'),
                 )
 
-@app.route(NAMESPACE + '/classify_many.json', methods=['POST'])
-@app.route(NAMESPACE + '/classify_many', methods=['POST', 'GET'])
-@autodoc(['models', 'api'])
-def image_classification_model_classify_many():
+@blueprint.route('/classify_many.json', methods=['POST'])
+@blueprint.route('/classify_many', methods=['POST', 'GET'])
+def classify_many():
     """
     Classify many images and return the top 5 classifications for each
 
     Returns JSON when requested: {classifications: {filename: [[category,confidence],...],...}}
     """
-    job = job_from_request()
+    model_job = job_from_request()
 
     image_list = flask.request.files.get('image_list')
     if not image_list:
         raise werkzeug.exceptions.BadRequest('image_list is a required field')
 
+    if 'image_folder' in flask.request.form and flask.request.form['image_folder'].strip():
+        image_folder = flask.request.form['image_folder']
+        if not os.path.exists(image_folder):
+            raise werkzeug.exceptions.BadRequest('image_folder "%s" does not exit' % image_folder)
+    else:
+        image_folder = None
+
+    if 'num_test_images' in flask.request.form and flask.request.form['num_test_images'].strip():
+        num_test_images = int(flask.request.form['num_test_images'])
+    else:
+        num_test_images = None
+
     epoch = None
     if 'snapshot_epoch' in flask.request.form:
         epoch = float(flask.request.form['snapshot_epoch'])
 
-    paths = []
-    images = []
-    ground_truths = []
-    dataset = job.train_task().dataset
+    paths, ground_truths = read_image_list(image_list, image_folder, num_test_images)
 
-    for line in image_list.readlines():
-        line = line.strip()
-        if not line:
-            continue
+    # create inference job
+    inference_job = ImageInferenceJob(
+                username    = utils.auth.get_username(),
+                name        = "Classify Many Images",
+                model       = model_job,
+                images      = paths,
+                epoch       = epoch,
+                layers      = 'none'
+                )
 
-        path = None
-        # might contain a numerical label at the end
-        match = re.match(r'(.*\S)\s+(\d+)$', line)
-        if match:
-            path = match.group(1)
-            ground_truth = int(match.group(2))
+    # schedule tasks
+    scheduler.add_job(inference_job)
+
+    # wait for job to complete
+    inference_job.wait_completion()
+
+    # retrieve inference data
+    inputs, outputs, _ = inference_job.get_data()
+
+    # delete job
+    scheduler.delete_job(inference_job)
+
+    if outputs is not None and len(outputs) < 1:
+        # an error occurred
+        outputs = None
+
+    if inputs is not None:
+        # retrieve path and ground truth of images that were successfully processed
+        paths = [paths[idx] for idx in inputs['ids']]
+        ground_truths = [ground_truths[idx] for idx in inputs['ids']]
+
+    # defaults
+    classifications = None
+    show_ground_truth = None
+    top1_accuracy = None
+    top5_accuracy = None
+    confusion_matrix = None
+    per_class_accuracy = None
+    labels = None
+
+    if outputs is not None:
+        # convert to class probabilities for viewing
+        last_output_name, last_output_data = outputs.items()[-1]
+        if len(last_output_data) < 1:
+            raise werkzeug.exceptions.BadRequest(
+                    'Unable to classify any image from the file')
+
+        scores = last_output_data
+        # take top 5
+        indices = (-scores).argsort()[:, :5]
+
+        labels = model_job.train_task().get_labels()
+        n_labels = len(labels)
+
+        # remove invalid ground truth
+        ground_truths = [x if x is not None and (0 <= x < n_labels) else None for x in ground_truths]
+
+        # how many pieces of ground truth to we have?
+        n_ground_truth = len([1 for x in ground_truths if x is not None])
+        show_ground_truth = n_ground_truth > 0
+
+        # compute classifications and statistics
+        classifications = []
+        n_top1_accurate = 0
+        n_top5_accurate = 0
+        confusion_matrix = np.zeros((n_labels,n_labels), dtype=np.dtype(int))
+        for image_index, index_list in enumerate(indices):
+            result = []
+            if ground_truths[image_index] is not None:
+                if ground_truths[image_index] == index_list[0]:
+                    n_top1_accurate += 1
+                if ground_truths[image_index] in index_list:
+                    n_top5_accurate += 1
+                if (0 <= ground_truths[image_index] < n_labels) and (0 <= index_list[0] < n_labels):
+                   confusion_matrix[ground_truths[image_index], index_list[0]] += 1
+            for i in index_list:
+                # `i` is a category in labels and also an index into scores
+                result.append((labels[i], round(100.0*scores[image_index, i],2)))
+            classifications.append(result)
+
+        # accuracy
+        if show_ground_truth:
+            top1_accuracy = round(100.0 * n_top1_accurate / n_ground_truth, 2)
+            top5_accuracy = round(100.0 * n_top5_accurate / n_ground_truth, 2)
+            per_class_accuracy = []
+            for x in xrange(n_labels):
+                n_examples = sum(confusion_matrix[x])
+                per_class_accuracy.append(round(100.0 * confusion_matrix[x,x] / n_examples, 2) if n_examples > 0 else None)
         else:
-            path = line
-            ground_truth = None
+            top1_accuracy = None
+            top5_accuracy = None
+            per_class_accuracy = None
 
-        try:
-            image = utils.image.load_image(path)
-            image = utils.image.resize_image(image,
-                    dataset.image_dims[0], dataset.image_dims[1],
-                    channels    = dataset.image_dims[2],
-                    resize_mode = dataset.resize_mode,
-                    )
-            paths.append(path)
-            images.append(image)
-            ground_truths.append(ground_truth)
-        except utils.errors.LoadImageError as e:
-            print e
-
-    if not len(images):
-        raise werkzeug.exceptions.BadRequest(
-                'Unable to load any images from the file')
-
-    labels, scores = job.train_task().infer_many(images, snapshot_epoch=epoch)
-    if scores is None:
-        raise RuntimeError('An error occured while processing the images')
-
-    # take top 5
-    indices = (-scores).argsort()[:, :5]
-
-    classifications = []
-    for image_index, index_list in enumerate(indices):
-        result = []
-        for i in index_list:
-            # `i` is a category in labels and also an index into scores
-            result.append((labels[i], round(100.0*scores[image_index, i],2)))
-        classifications.append(result)
-
-    # replace ground truth indices with labels
-    ground_truths = [labels[x] if x is not None and (0 <= x < len(labels)) else None for x in ground_truths]
+        # replace ground truth indices with labels
+        ground_truths = [labels[x] if x is not None and (0 <= x < n_labels ) else None for x in ground_truths]
 
     if request_wants_json():
         joined = dict(zip(paths, classifications))
         return flask.jsonify({'classifications': joined})
     else:
         return flask.render_template('models/images/classification/classify_many.html',
-                job             = job,
-                paths           = paths,
-                classifications = classifications,
-                show_ground_truth= not(ground_truths == [None]*len(ground_truths)),
-                ground_truths   = ground_truths
+                model_job          = model_job,
+                job                = inference_job,
+                paths              = paths,
+                classifications    = classifications,
+                show_ground_truth  = show_ground_truth,
+                ground_truths      = ground_truths,
+                top1_accuracy      = top1_accuracy,
+                top5_accuracy      = top5_accuracy,
+                confusion_matrix   = confusion_matrix,
+                per_class_accuracy = per_class_accuracy,
+                labels             = labels,
                 )
 
-@app.route(NAMESPACE + '/top_n', methods=['POST'])
-@autodoc('models')
-def image_classification_model_top_n():
+@blueprint.route('/top_n', methods=['POST'])
+def top_n():
     """
     Classify many images and show the top N images per category by confidence
     """
-    job = job_from_request()
+    model_job = job_from_request()
 
     image_list = flask.request.files['image_list']
     if not image_list:
@@ -407,67 +526,74 @@ def image_classification_model_top_n():
         top_n = int(flask.request.form['top_n'])
     else:
         top_n = 9
-    if 'num_test_images' in flask.request.form and flask.request.form['num_test_images'].strip():
-        num_images = int(flask.request.form['num_test_images'])
+
+    if 'image_folder' in flask.request.form and flask.request.form['image_folder'].strip():
+        image_folder = flask.request.form['image_folder']
+        if not os.path.exists(image_folder):
+            raise werkzeug.exceptions.BadRequest('image_folder "%s" does not exit' % image_folder)
     else:
-        num_images = None
+        image_folder = None
 
-    paths = []
-    for line in image_list.readlines():
-        line = line.strip()
-        if not line:
-            continue
+    if 'num_test_images' in flask.request.form and flask.request.form['num_test_images'].strip():
+        num_test_images = int(flask.request.form['num_test_images'])
+    else:
+        num_test_images = None
 
-        path = None
-        # might contain a numerical label at the end
-        match = re.match(r'(.*\S)\s+\d+$', line)
-        if match:
-            path = match.group(1)
-        else:
-            path = line
-        paths.append(path)
-    random.shuffle(paths)
+    paths, _ = read_image_list(image_list, image_folder, num_test_images)
 
-    images = []
-    dataset = job.train_task().dataset
-    for path in paths:
-        try:
-            image = utils.image.load_image(path)
-            image = utils.image.resize_image(image,
-                    dataset.image_dims[0], dataset.image_dims[1],
-                    channels    = dataset.image_dims[2],
-                    resize_mode = dataset.resize_mode,
-                    )
-            images.append(image)
-            if num_images and len(images) >= num_images:
-                break
-        except utils.errors.LoadImageError as e:
-            print e
+    # create inference job
+    inference_job = ImageInferenceJob(
+                username    = utils.auth.get_username(),
+                name        = "TopN Image Classification",
+                model       = model_job,
+                images      = paths,
+                epoch       = epoch,
+                layers      = 'none'
+                )
 
-    if not len(images):
-        raise werkzeug.exceptions.BadRequest(
-                'Unable to load any images from the file')
+    # schedule tasks
+    scheduler.add_job(inference_job)
 
-    labels, scores = job.train_task().infer_many(images, snapshot_epoch=epoch)
-    if scores is None:
-        raise RuntimeError('An error occured while processing the images')
+    # wait for job to complete
+    inference_job.wait_completion()
 
-    indices = (-scores).argsort(axis=0)[:top_n]
-    results = []
-    for i in xrange(indices.shape[1]):
-        result_images = []
-        for j in xrange(top_n):
-            result_images.append(images[indices[j][i]])
-        results.append((
-                labels[i],
-                utils.image.embed_image_html(
-                    utils.image.vis_square(np.array(result_images))
-                    )
-                ))
+    # retrieve inference data
+    inputs, outputs, _ = inference_job.get_data()
+
+    # delete job
+    scheduler.delete_job(inference_job)
+
+    results = None
+    if outputs is not None and len(outputs) > 0:
+        # convert to class probabilities for viewing
+        last_output_name, last_output_data = outputs.items()[-1]
+        scores = last_output_data
+
+        if scores is None:
+            raise RuntimeError('An error occured while processing the images')
+
+        labels = model_job.train_task().get_labels()
+        images = inputs['data']
+        indices = (-scores).argsort(axis=0)[:top_n]
+        results = []
+        # Can't have more images per category than the number of images
+        images_per_category = min(top_n, len(images))
+        for i in xrange(indices.shape[1]):
+            result_images = []
+            for j in xrange(images_per_category):
+                result_images.append(images[indices[j][i]])
+            results.append((
+                    labels[i],
+                    utils.image.embed_image_html(
+                        utils.image.vis_square(np.array(result_images),
+                            colormap='white')
+                        )
+                    ))
 
     return flask.render_template('models/images/classification/top_n.html',
-            job=job,
-            results=results,
+            model_job       = model_job,
+            job             = inference_job,
+            results         = results,
             )
 
 def get_datasets():

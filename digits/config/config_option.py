@@ -1,4 +1,4 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
 
 class BadValue(Exception):
     # thrown when a bad value is passed to option.set()
@@ -38,7 +38,7 @@ class Option(object):
         return None
 
     @classmethod
-    def visibility(self):
+    def visibility(cls):
         return Visibility.DEFAULT
 
     def optional(self):
@@ -99,7 +99,7 @@ class Option(object):
         return self.valid() and bool(self._config_file_value)
 
     @classmethod
-    def validate(self, value):
+    def validate(cls, value):
         """
         Returns a fixed-up valid version of value
         Raises BadValue if invalid

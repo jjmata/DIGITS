@@ -1,30 +1,35 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import re
-import os
+import itertools
 import json
+import os
+import re
 import shutil
 import tempfile
 import time
 import unittest
-import itertools
 import urllib
-import tempfile
 
-import mock
-import flask
-from gevent import monkey
-monkey.patch_all()
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
 from bs4 import BeautifulSoup
+import flask
+import mock
 import PIL.Image
 from urlparse import urlparse
-from cStringIO import StringIO
-import caffe_pb2
 
-import digits.webapp
-import digits.test_views
-import digits.dataset.images.classification.test_views
 from digits.config import config_value
+import digits.dataset.images.classification.test_views
+import digits.test_views
+import digits.webapp
+
+# Must import after importing digit.config
+import caffe_pb2
 
 # May be too short on a slow system
 TIMEOUT_DATASET = 45
@@ -132,6 +137,7 @@ class BaseViewsTestWithDataset(BaseViewsTest,
     TRAIN_EPOCHS = 1
     SHUFFLE = False
     LR_POLICY = None
+    LR_MULTISTEP_VALUES = None
     LEARNING_RATE = None
 
     @classmethod
@@ -175,6 +181,8 @@ class BaseViewsTestWithDataset(BaseViewsTest,
             data['lr_policy'] = cls.LR_POLICY
         if cls.LEARNING_RATE is not None:
             data['learning_rate'] = cls.LEARNING_RATE
+        if cls.LR_MULTISTEP_VALUES is not None:
+            data['lr_multistep_values'] = cls.LR_MULTISTEP_VALUES
         data.update(kwargs)
 
         request_json = data.pop('json', False)
@@ -196,9 +204,10 @@ class BaseViewsTestWithDataset(BaseViewsTest,
             s = BeautifulSoup(rv.data, 'html.parser')
             div = s.select('div.alert-danger')
             if div:
-                raise RuntimeError(div[0])
+                print div[0]
             else:
-                raise RuntimeError('Failed to create model')
+                print rv.data
+            raise RuntimeError('Failed to create dataset - status %s' % rv.status_code)
 
         job_id = cls.job_id_from_response(rv)
         assert cls.model_exists(job_id), 'model not found after successful creation'
@@ -320,8 +329,6 @@ class BaseTestCreation(BaseViewsTestWithDataset):
         gpu_list = config_value('gpu_list').split(',')
         for i in xrange(len(gpu_list)):
             for combination in itertools.combinations(gpu_list, i+1):
-                if self.FRAMEWORK=='torch' and len(combination)>1:
-                    raise unittest.SkipTest('Torch not tested with multi-GPU')
                 yield self.check_select_gpus, combination
 
     def check_select_gpus(self, gpu_list):
@@ -607,6 +614,27 @@ class BaseTestCreated(BaseViewsTestWithModel):
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
 
+    def test_classify_many_from_folder(self):
+        textfile_images = ''
+        label_id = 0
+        for label, images in self.imageset_paths.iteritems():
+            for image in images:
+                image_path = image
+                textfile_images += '%s %d\n' % (image_path, label_id)
+            label_id += 1
+
+        # StringIO wrapping is needed to simulate POST file upload.
+        file_upload = (StringIO(textfile_images), 'images.txt')
+
+        rv = self.app.post(
+                '/models/images/classification/classify_many?job_id=%s' % self.model_id,
+                data = {'image_list': file_upload, 'image_folder': self.imageset_folder}
+                )
+
+        s = BeautifulSoup(rv.data, 'html.parser')
+        body = s.select('body')
+        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
+
     def test_classify_many_invalid_ground_truth(self):
         textfile_images = ''
         label_id = 0
@@ -667,6 +695,30 @@ class BaseTestCreated(BaseViewsTestWithModel):
                 '/models/images/classification/top_n?job_id=%s' % self.model_id,
                 data = {'image_list': file_upload}
                 )
+        s = BeautifulSoup(rv.data, 'html.parser')
+        body = s.select('body')
+        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
+        keys = self.imageset_paths.keys()
+        for key in keys:
+            assert key in rv.data, '"%s" not found in the response'
+
+    def test_top_n_from_folder(self):
+        textfile_images = ''
+        label_id = 0
+        for label, images in self.imageset_paths.iteritems():
+            for image in images:
+                image_path = image
+                textfile_images += '%s %d\n' % (image_path, label_id)
+            label_id += 1
+
+        # StringIO wrapping is needed to simulate POST file upload.
+        file_upload = (StringIO(textfile_images), 'images.txt')
+
+        rv = self.app.post(
+                '/models/images/classification/top_n?job_id=%s' % self.model_id,
+                data = {'image_list': file_upload, 'image_folder': self.imageset_folder}
+                )
+
         s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
@@ -847,6 +899,11 @@ class TestCaffeCreatedCropInForm(BaseTestCreatedCropInForm):
 class TestCaffeCreatedCropInNetwork(BaseTestCreatedCropInNetwork):
     FRAMEWORK = 'caffe'
 
+class TestCaffeCreatedMultiStepLR(BaseTestCreated):
+    FRAMEWORK = 'caffe'
+    LR_POLICY = 'multistep'
+    LR_MULTISTEP_VALUES = '50,75,90'
+
 class TestTorchViews(BaseTestViews):
     FRAMEWORK = 'torch'
 
@@ -871,6 +928,11 @@ class TestTorchCreatedHdf5Shuffle(TestTorchCreatedHdf5):
 
 class TestTorchDatasetModelInteractions(BaseTestDatasetModelInteractions):
     FRAMEWORK = 'torch'
+
+class TestTorchCreatedMultiStepLR(BaseTestCreated):
+    FRAMEWORK = 'torch'
+    LR_POLICY = 'multistep'
+    LR_MULTISTEP_VALUES = '50,75,90'
 
 class TestCaffeLeNet(TestCaffeCreated):
     IMAGE_WIDTH = 28

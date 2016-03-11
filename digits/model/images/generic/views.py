@@ -1,4 +1,5 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import os
 import re
@@ -7,23 +8,24 @@ import tempfile
 import flask
 import werkzeug.exceptions
 
+from .forms import GenericImageModelForm
+from .job import GenericImageModelJob
 from digits import frameworks
-from digits.config import config_value
 from digits import utils
-from digits.utils.routing import request_wants_json, job_from_request
-from digits.utils.forms import fill_form_if_cloned, save_form_to_job
-from digits.webapp import app, scheduler, autodoc
+from digits.config import config_value
 from digits.dataset import GenericImageDatasetJob
-from forms import GenericImageModelForm
-from job import GenericImageModelJob
+from digits.inference import ImageInferenceJob
 from digits.status import Status
 from digits.utils import filesystem as fs
+from digits.utils.forms import fill_form_if_cloned, save_form_to_job
+from digits.utils.routing import request_wants_json, job_from_request
+from digits.webapp import app, scheduler
 
-NAMESPACE   = '/models/images/generic'
+blueprint = flask.Blueprint(__name__, __name__)
 
-@app.route(NAMESPACE + '/new', methods=['GET'])
-@autodoc('models')
-def generic_image_model_new():
+@blueprint.route('/new', methods=['GET'])
+@utils.auth.requires_login
+def new():
     """
     Return a form for a new GenericImageModelJob
     """
@@ -45,10 +47,10 @@ def generic_image_model_new():
             multi_gpu = config_value('caffe_root')['multi_gpu'],
             )
 
-@app.route(NAMESPACE + '.json', methods=['POST'])
-@app.route(NAMESPACE, methods=['POST'])
-@autodoc(['models', 'api'])
-def generic_image_model_create():
+@blueprint.route('.json', methods=['POST'])
+@blueprint.route('', methods=['POST'], strict_slashes=False)
+@utils.auth.requires_login(redirect=False)
+def create():
     """
     Create a new GenericImageModelJob
 
@@ -84,6 +86,7 @@ def generic_image_model_create():
     job = None
     try:
         job = GenericImageModelJob(
+                username    = utils.auth.get_username(),
                 name        = form.model_name.data,
                 dataset_id  = datasetJob.id(),
                 )
@@ -99,7 +102,8 @@ def generic_image_model_create():
                 raise werkzeug.exceptions.BadRequest(
                         'Job not found: %s' % form.previous_networks.data)
 
-            network = fw.get_network_from_previous(old_job.train_task().network)
+            use_same_dataset = (old_job.dataset_id == job.dataset_id)
+            network = fw.get_network_from_previous(old_job.train_task().network, use_same_dataset)
 
             for choice in form.previous_networks.choices:
                 if choice[0] == form.previous_networks.data:
@@ -204,7 +208,7 @@ def generic_image_model_create():
         if request_wants_json():
             return flask.jsonify(job.json_dict())
         else:
-            return flask.redirect(flask.url_for('models_show', job_id=job.id()))
+            return flask.redirect(flask.url_for('digits.model.views.show', job_id=job.id()))
 
     except:
         if job:
@@ -217,9 +221,8 @@ def show(job):
     """
     return flask.render_template('models/images/generic/show.html', job=job)
 
-@app.route(NAMESPACE + '/large_graph', methods=['GET'])
-@autodoc('models')
-def generic_image_model_large_graph():
+@blueprint.route('/large_graph', methods=['GET'])
+def large_graph():
     """
     Show the loss/accuracy graph, but bigger
     """
@@ -227,35 +230,24 @@ def generic_image_model_large_graph():
 
     return flask.render_template('models/images/generic/large_graph.html', job=job)
 
-@app.route(NAMESPACE + '/infer_one.json', methods=['POST'])
-@app.route(NAMESPACE + '/infer_one', methods=['POST', 'GET'])
-@autodoc(['models', 'api'])
-def generic_image_model_infer_one():
+@blueprint.route('/infer_one.json', methods=['POST'])
+@blueprint.route('/infer_one', methods=['POST', 'GET'])
+def infer_one():
     """
     Infer one image
     """
-    job = job_from_request()
+    model_job = job_from_request()
 
     image = None
     if 'image_url' in flask.request.form and flask.request.form['image_url']:
-        image = utils.image.load_image(flask.request.form['image_url'])
+        image_path = flask.request.form['image_url']
     elif 'image_file' in flask.request.files and flask.request.files['image_file']:
         outfile = tempfile.mkstemp(suffix='.bin')
         flask.request.files['image_file'].save(outfile[1])
-        image = utils.image.load_image(outfile[1])
+        image_path = outfile[1]
         os.close(outfile[0])
-        os.remove(outfile[1])
     else:
         raise werkzeug.exceptions.BadRequest('must provide image_url or image_file')
-
-    # resize image
-    db_task = job.train_task().dataset.analyze_db_tasks()[0]
-    height = db_task.image_height
-    width = db_task.image_width
-    image = utils.image.resize_image(image, height, width,
-            channels = db_task.image_channels,
-            resize_mode = 'squash',
-            )
 
     epoch = None
     if 'snapshot_epoch' in flask.request.form:
@@ -265,43 +257,79 @@ def generic_image_model_infer_one():
     if 'show_visualizations' in flask.request.form and flask.request.form['show_visualizations']:
         layers = 'all'
 
-    outputs, visualizations = job.train_task().infer_one(image, snapshot_epoch=epoch, layers=layers)
+    # create inference job
+    inference_job = ImageInferenceJob(
+                username    = utils.auth.get_username(),
+                name        = "Infer One Image",
+                model       = model_job,
+                images      = [image_path],
+                epoch       = epoch,
+                layers      = layers
+                )
+
+    # schedule tasks
+    scheduler.add_job(inference_job)
+
+    # wait for job to complete
+    inference_job.wait_completion()
+
+    # retrieve inference data
+    inputs, outputs, visualizations = inference_job.get_data()
+
+    # delete job folder and remove from scheduler list
+    scheduler.delete_job(inference_job)
+
+    # remove file (fails if a URL was provided)
+    try:
+        os.remove(image_path)
+    except:
+        pass
+
+    image = None
+    if inputs is not None and len(inputs['data']) == 1:
+        image = utils.image.embed_image_html(inputs['data'][0])
 
     if request_wants_json():
         return flask.jsonify({'outputs': dict((name, blob.tolist()) for name,blob in outputs.iteritems())})
     else:
         return flask.render_template('models/images/generic/infer_one.html',
-                job             = job,
-                image_src       = utils.image.embed_image_html(image),
+                model_job       = model_job,
+                job             = inference_job,
+                image_src       = image,
                 network_outputs = outputs,
                 visualizations  = visualizations,
                 total_parameters= sum(v['param_count'] for v in visualizations if v['vis_type'] == 'Weights'),
                 )
 
-@app.route(NAMESPACE + '/infer_many.json', methods=['POST'])
-@app.route(NAMESPACE + '/infer_many', methods=['POST', 'GET'])
-@autodoc(['models', 'api'])
-def generic_image_model_infer_many():
+@blueprint.route('/infer_many.json', methods=['POST'])
+@blueprint.route('/infer_many', methods=['POST', 'GET'])
+def infer_many():
     """
     Infer many images
     """
-    job = job_from_request()
+    model_job = job_from_request()
 
     image_list = flask.request.files.get('image_list')
     if not image_list:
         raise werkzeug.exceptions.BadRequest('image_list is a required field')
+
+    if 'image_folder' in flask.request.form and flask.request.form['image_folder'].strip():
+        image_folder = flask.request.form['image_folder']
+        if not os.path.exists(image_folder):
+            raise werkzeug.exceptions.BadRequest('image_folder "%s" does not exit' % image_folder)
+    else:
+        image_folder = None
+
+    if 'num_test_images' in flask.request.form and flask.request.form['num_test_images'].strip():
+        num_test_images = int(flask.request.form['num_test_images'])
+    else:
+        num_test_images = None
 
     epoch = None
     if 'snapshot_epoch' in flask.request.form:
         epoch = float(flask.request.form['snapshot_epoch'])
 
     paths = []
-    images = []
-
-    db_task = job.train_task().dataset.analyze_db_tasks()[0]
-    height = db_task.image_height
-    width = db_task.image_width
-    channels = db_task.image_channels
 
     for line in image_list.readlines():
         line = line.strip()
@@ -316,24 +344,41 @@ def generic_image_model_infer_many():
         else:
             path = line
 
-        try:
-            image = utils.image.load_image(path)
-            image = utils.image.resize_image(image, height, width,
-                    channels = channels,
-                    resize_mode = 'squash',
-                    )
-            paths.append(path)
-            images.append(image)
-        except utils.errors.LoadImageError as e:
-            print e
+        if not utils.is_url(path) and image_folder and not os.path.isabs(path):
+            path = os.path.join(image_folder, path)
+        paths.append(path)
 
-    if not len(images):
-        raise werkzeug.exceptions.BadRequest(
-                'Unable to load any images from the file')
+        if num_test_images is not None and len(paths) >= num_test_images:
+            break
 
-    outputs = job.train_task().infer_many(images, snapshot_epoch=epoch)
-    if outputs is None:
-        raise RuntimeError('An error occured while processing the images')
+    # create inference job
+    inference_job = ImageInferenceJob(
+                username    = utils.auth.get_username(),
+                name        = "Infer Many Images",
+                model       = model_job,
+                images      = paths,
+                epoch       = epoch,
+                layers      = 'none'
+                )
+
+    # schedule tasks
+    scheduler.add_job(inference_job)
+
+    # wait for job to complete
+    inference_job.wait_completion()
+
+    # retrieve inference data
+    inputs, outputs, _ = inference_job.get_data()
+
+    # delete job folder and remove from scheduler list
+    scheduler.delete_job(inference_job)
+
+    if outputs is not None and len(outputs) < 1:
+        # an error occurred
+        outputs = None
+
+    if inputs is not None:
+        paths = [paths[idx] for idx in inputs['ids']]
 
     if request_wants_json():
         result = {}
@@ -342,7 +387,8 @@ def generic_image_model_infer_many():
         return flask.jsonify({'outputs': result})
     else:
         return flask.render_template('models/images/generic/infer_many.html',
-                job             = job,
+                model_job       = model_job,
+                job             = inference_job,
                 paths           = paths,
                 network_outputs = outputs,
                 )

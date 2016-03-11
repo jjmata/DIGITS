@@ -14,6 +14,7 @@ Table of Contents
     * [Selecting the NN Backend](#selecting-the-nn-backend)
     * [Supervised Regression Learning](#supervised-regression-learning)
     * [Command Line Inference](#command-line-inference)
+    * [Multi-GPU training](#multi-gpu-training)
 * [Tutorials](#tutorials)
     * [Training an autoencoder](#training-an-autoencoder)
     * [Training a regression model](#training-a-regression-model)
@@ -50,6 +51,8 @@ Where is torch installed?
 Select one of the "torch" tabs on the model creation page:
 
 ![Home page](images/torch-selection.png)
+
+> NOTE: by default, Torch7 initializes the weights of linear and convolutional layers according to the method introduced in `LeCun, Yann A., et al. "Efficient backprop." Neural networks: Tricks of the trade. Springer Berlin Heidelberg, 2012. 9-48.`. Although this weight initialization scheme performs reasonably well under many diverse circumstances, this is rarely optimal and you might notice that Caffe is sometimes able to learn more quickly when using e.g. Xavier initialization. See [these examples](../examples/weight-init/README.md) for more information.
 
 ## Defining a Torch7 model in DIGITS
 
@@ -102,10 +105,16 @@ croplen               | number       | No        | If specified, inputs images w
 labelHook             | function     | No        | A function(input,dblabel) that returns the intended label(target) for the current batch given the provided input and label in database. By default the database label is used.
 trainBatchSize        | number       | No        | If specified, sets train batch size. May be overridden by user in DIGITS UI.
 validationBatchSize   | number       | No        | If specified, sets validation batch size. May be overridden by user in DIGITS UI.
+fineTuneHook          | function     | No        | A function(net) that returns the model to be used for fine-tuning. The untuned model is passed as a function parameter.
 
 ### Tensors
 
 Networks are fed with Torch Tensor objects in the NxCxHxW format (index in batch x channels x height x width). If a GPU is available, Tensors are provided as Cuda tensors and the model and criterion are moved to GPUs through a call to their cuda() method. In the absence of GPUs, Tensors are provided as Float tensors.
+
+### Fine-tuning
+
+For network fine-tuning the `model` returned as part of the table of internal parameters must be *exactly* the same as the original (pretrained) model to fine-tune.
+The user-defined `fineTuneHook(net)` function is where the original model (passed through the `net` parameter) may be adjusted to solve a different problem.
 
 ## Examples
 
@@ -184,6 +193,28 @@ th /fast-scratch/gheinrich/ws/digits/tools/torch/test.lua --image=/path/to/image
 2015-09-22 15:21:55 [INFO ] For image 1, predicted class 5: 5 (4) 9.7695222396362e-07
 ```
 
+### Multi-GPU training
+
+Data parallelism is supported in Torch7 by cunn through the [DataParallelTable](https://github.com/torch/cunn/blob/master/doc/cunnmodules.md#nn.DataParallelTable)
+module. DIGITS provides the number of available GPUs through the `ngpus` external parameter.
+
+Assuming `net` is a container that encapsulates the definition of a network, the following snippet may be used
+to enable data parallelism into a container called `model`:
+
+```lua
+local model
+if ngpus>1 then
+   model = nn.DataParallelTable(1)  -- Split along first (batch) dimension
+   for i = 1, ngpus do
+      cutorch.setDevice(i)
+      model:add(net:clone(), i)  -- Use the ith GPU
+   end
+   cutorch.setDevice(1)  -- This is the 'primary' GPU
+else
+   model = net
+end
+```
+
 ## Tutorials
 
 ### Training an autoencoder
@@ -193,3 +224,12 @@ Follow [these instructions](../examples/autoencoder/README.md) to learn how to c
 ### Training a regression model
 
 Follow [these instructions](../examples/regression/README.md) to learn how to create a regression model using Caffe or Torch7 in DIGITS.
+
+### Siamese network
+
+Follow [these instructions](../examples/siamese/README.md) to learn how to create a Siamese network model using Caffe or Torch7 in DIGITS.
+
+### Fine-tuning
+
+Follow [these instructions](../examples/fine-tuning/README.md) to learn how to fine-tune a model using Caffe or Torch7 in DIGITS.
+

@@ -1,13 +1,13 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import time
 import json
+import time
 import urllib
 
-from gevent import monkey; monkey.patch_all()
 from urlparse import urlparse
 
-import webapp
+from . import webapp
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -28,6 +28,10 @@ class BaseViewsTest(object):
         cls.created_datasets = []
         cls.created_models = []
 
+        rv = cls.app.post('/login', data={
+            'username':'digits-testsuite'})
+        assert rv.status_code == 302, 'Login failed with %s' % rv.status_code
+
     @classmethod
     def tearDownClass(cls):
         # Remove all created jobs
@@ -35,6 +39,9 @@ class BaseViewsTest(object):
             cls.delete_model(job_id)
         for job_id in cls.created_datasets:
             cls.delete_dataset(job_id)
+
+        rv = cls.app.post('/logout')
+        assert rv.status_code == 302, 'Logout failed with %s' % rv.status_code
 
     @classmethod
     def job_id_from_response(cls, rv):

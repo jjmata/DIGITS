@@ -1,13 +1,19 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import os.path
-
-import requests
-import cStringIO
-import PIL.Image
-import numpy as np
-import scipy.misc
 import math
+import os.path
+import requests
+
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
+import numpy as np
+import PIL.Image
+import scipy.misc
 
 from . import is_url, HTTP_TIMEOUT, errors
 
@@ -45,7 +51,7 @@ def load_image(path):
                     allow_redirects=False,
                     timeout=HTTP_TIMEOUT)
             r.raise_for_status()
-            stream = cStringIO.StringIO(r.content)
+            stream = StringIO(r.content)
             image = PIL.Image.open(stream)
         except requests.exceptions.RequestException as e:
             raise errors.LoadImageError, e.message
@@ -278,7 +284,7 @@ def embed_image_html(image):
     else:
         fmt = fmt.lower()
 
-    string_buf = cStringIO.StringIO()
+    string_buf = StringIO()
     image.save(string_buf, format=fmt)
     data = string_buf.getvalue().encode('base64').replace('\n', '')
     return 'data:image/%s;base64,%s' % (fmt, data)
@@ -383,7 +389,7 @@ def vis_square(images,
     Keyword arguments:
     padsize -- how many pixels go inbetween the tiles
     normalize -- if true, scales (min, max) across all images out to (0, 1)
-    colormap -- a string representing one of the suppoted colormaps
+    colormap -- a string representing one of the supported colormaps
     """
     assert 3 <= images.ndim <= 4, 'images.ndim must be 3 or 4'
     # convert to float since we're going to do some math

@@ -1,29 +1,37 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import re
-import os
+import itertools
 import json
+import os
+import re
 import shutil
 import tempfile
 import time
 import unittest
-import itertools
 import urllib
 
-import mock
-import flask
-from gevent import monkey
-monkey.patch_all()
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
 from bs4 import BeautifulSoup
+import flask
+import mock
 import PIL.Image
 from urlparse import urlparse
-from cStringIO import StringIO
+
+from digits.config import config_value
+import digits.dataset.images.generic.test_views
+import digits.test_views
+import digits.webapp
+
+# Must import after importing digit.config
 import caffe_pb2
 
-import digits.webapp
-import digits.test_views
-import digits.dataset.images.generic.test_views
-from digits.config import config_value
+import numpy as np
 
 # May be too short on a slow system
 TIMEOUT_DATASET = 45
@@ -193,9 +201,10 @@ class BaseViewsTestWithDataset(BaseViewsTest,
             s = BeautifulSoup(rv.data, 'html.parser')
             div = s.select('div.alert-danger')
             if div:
-                raise RuntimeError(div[0])
+                print div[0]
             else:
-                raise RuntimeError('Failed to create model')
+                print rv.data
+            raise RuntimeError('Failed to create dataset - status %s' % rv.status_code)
 
         job_id = cls.job_id_from_response(rv)
         assert cls.model_exists(job_id), 'model not found after successful creation'
@@ -562,6 +571,22 @@ class BaseTestCreated(BaseViewsTestWithModel):
         headers = s.select('table.table th')
         assert headers is not None, 'unrecognized page format'
 
+    def test_infer_many_from_folder(self):
+        textfile_images = '%s\n' % os.path.basename(self.test_image)
+
+        # StringIO wrapping is needed to simulate POST file upload.
+        file_upload = (StringIO(textfile_images), 'images.txt')
+
+        rv = self.app.post(
+                '/models/images/generic/infer_many?job_id=%s' % self.model_id,
+                data = {'image_list': file_upload, 'image_folder': os.path.dirname(self.test_image)}
+                )
+        s = BeautifulSoup(rv.data, 'html.parser')
+        body = s.select('body')
+        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
+        headers = s.select('table.table th')
+        assert headers is not None, 'unrecognized page format'
+
     def test_infer_many_json(self):
         textfile_images = '%s\n' % self.test_image
 
@@ -758,3 +783,87 @@ class TestTorchCreatedCropInForm(BaseTestCreatedCropInForm):
 
 class TestTorchDatasetModelInteractions(BaseTestDatasetModelInteractions):
     FRAMEWORK = 'torch'
+
+class TestTorchTableOutput(BaseTestCreated):
+    FRAMEWORK = 'torch'
+    TORCH_NETWORK = \
+"""
+return function(p)
+    -- same network as in class BaseTestCreated except that each gradient
+    -- is learnt separately: the input is fed into nn.ConcatTable and
+    -- each branch outputs one of the gradients
+    local nDim = 1
+    if p.inputShape then p.inputShape:apply(function(x) nDim=nDim*x end) end
+    local net = nn.Sequential()
+    net:add(nn.MulConstant(0.004))
+    net:add(nn.View(-1):setNumInputDims(3))  -- flatten
+    -- set all weights and biases to zero as this speeds learning up
+    -- for the type of problem we're trying to solve in this test
+    local linearLayer1 = nn.Linear(nDim, 1)
+    linearLayer1.weight:fill(0)
+    linearLayer1.bias:fill(0)
+    local linearLayer2 = nn.Linear(nDim, 1)
+    linearLayer2.weight:fill(0)
+    linearLayer2.bias:fill(0)
+    -- create concat table
+    local parallel = nn.ConcatTable()
+    parallel:add(linearLayer1):add(linearLayer2)
+    net:add(parallel)
+    -- create two MSE criteria to optimize each gradient separately
+    local mse1 = nn.MSECriterion()
+    local mse2 = nn.MSECriterion()
+    -- now create a criterion that takes as input each of the two criteria
+    local finalCriterion = nn.ParallelCriterion(false):add(mse1):add(mse2)
+    -- create label hook
+    function labelHook(input, dblabel)
+        -- split label alongside 2nd dimension
+        local labelTable = dblabel:split(1,2)
+        return labelTable
+    end
+    return {
+        model = net,
+        loss = finalCriterion,
+        labelHook = labelHook,
+    }
+end
+"""
+
+class TestTorchNDOutput(BaseTestCreated):
+    FRAMEWORK = 'torch'
+    CROP_SIZE = 8
+    TORCH_NETWORK = \
+"""
+return function(p)
+    -- this model just forwards the input as is
+    local net = nn.Sequential():add(nn.Identity())
+    -- create label hook
+    function labelHook(input, dblabel)
+        return input
+    end
+    return {
+        model = net,
+        loss = nn.AbsCriterion(),
+        labelHook = labelHook,
+    }
+end
+"""
+
+    def test_infer_one_json(self):
+
+        image_path = os.path.join(self.imageset_folder, self.test_image)
+        with open(image_path,'rb') as infile:
+            # StringIO wrapping is needed to simulate POST file upload.
+            image_upload = (StringIO(infile.read()), 'image.png')
+
+        rv = self.app.post(
+                '/models/images/generic/infer_one.json?job_id=%s' % self.model_id,
+                data = {
+                    'image_file': image_upload,
+                    }
+                )
+        assert rv.status_code == 200, 'POST failed with %s' % rv.status_code
+        # make sure the shape of the output matches the shape of the input
+        data = json.loads(rv.data)
+        output = np.array(data['outputs']['output'][0])
+        assert output.shape == (1, self.CROP_SIZE, self.CROP_SIZE), \
+                'shape mismatch: %s' % str(output.shape)

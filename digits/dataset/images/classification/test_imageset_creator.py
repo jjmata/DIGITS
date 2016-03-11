@@ -1,13 +1,15 @@
 #!/usr/bin/env python2
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
 """
 Functions for creating temporary datasets
 Used in test_views
 """
+from __future__ import absolute_import
 
-import os
-import time
 import argparse
 from collections import defaultdict
+import os
+import time
 
 import numpy as np
 import PIL.Image

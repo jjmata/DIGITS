@@ -1,16 +1,18 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import os
-import time
 import os.path
 import pickle
 import shutil
+import threading
+import time
 
 import flask
 
+from .status import Status, StatusCls
 from digits.config import config_value
 from digits.utils import sizeof_fmt, filesystem as fs
-from status import Status, StatusCls
 
 # NOTE: Increment this everytime the pickled object changes
 PICKLE_VERSION = 1
@@ -42,10 +44,11 @@ class Job(StatusCls):
                     task.detect_snapshots()
             return job
 
-    def __init__(self, name):
+    def __init__(self, name, username):
         """
         Arguments:
         name -- name of this job
+        username -- creator of this job
         """
         super(Job, self).__init__()
 
@@ -53,10 +56,12 @@ class Job(StatusCls):
         self._id = '%s-%s' % (time.strftime('%Y%m%d-%H%M%S'), os.urandom(2).encode('hex'))
         self._dir = os.path.join(config_value('jobs_dir'), self._id)
         self._name = name
+        self.username = username
         self.pickver_job = PICKLE_VERSION
         self.tasks = []
         self.exception = None
         self._notes = None
+        self.event = threading.Event()
 
         os.mkdir(self._dir)
 
@@ -69,6 +74,8 @@ class Job(StatusCls):
         # Isn't linked to state
         if '_dir' in d:
             del d['_dir']
+        if 'event' in d:
+            del d['event']
 
         return d
 
@@ -76,6 +83,8 @@ class Job(StatusCls):
         """
         Used when loading a pickle file
         """
+        if 'username' not in state:
+            state['username'] = None
         self.__dict__ = state
 
     def json_dict(self, detailed=False):
@@ -118,8 +127,8 @@ class Job(StatusCls):
             path = filename
         else:
             path = os.path.join(self._dir, filename)
-        if relative:
-            path = os.path.relpath(path, config_value('jobs_dir'))
+            if relative:
+                path = os.path.relpath(path, config_value('jobs_dir'))
         return str(path).replace("\\","/")
 
     def path_is_local(self, path):
@@ -175,6 +184,10 @@ class Job(StatusCls):
                 namespace='/jobs',
                 room='job_management',
                 )
+
+        if not self.status.is_running():
+            # release threads that are waiting for job to complete
+            self.event.set()
 
     def abort(self):
         """
@@ -241,3 +254,15 @@ class Job(StatusCls):
                       namespace='/jobs',
                       room='job_management'
                   )
+
+    def wait_completion(self):
+        """
+        Wait for the job to complete
+        """
+        self.event.wait()
+
+    def is_read_only(self):
+        """
+        Returns False if this job can be edited
+        """
+        return False

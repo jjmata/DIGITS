@@ -1,4 +1,4 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
 
 import os
 
@@ -130,15 +130,26 @@ class ModelForm(Form):
 
     ### Solver types
 
-    solver_type = utils.forms.SelectField('Solver type',
+    solver_type = utils.forms.SelectField(
+        'Solver type',
         choices = [
-                ('SGD', 'Stochastic gradient descent (SGD)'),
-                ('ADAGRAD', 'Adaptive gradient (AdaGrad)'),
-                ('NESTEROV', "Nesterov's accelerated gradient (NAG)"),
-                ],
-            default = 'SGD',
-            tooltip = "What type of solver will be used??"
-            )
+            ('SGD', 'Stochastic gradient descent (SGD)'),
+            ('NESTEROV', "Nesterov's accelerated gradient (NAG)"),
+            ('ADAGRAD', 'Adaptive gradient (AdaGrad)'),
+            ('RMSPROP', 'RMSprop'),
+            ('ADADELTA', 'AdaDelta'),
+            ('ADAM', 'Adam'),
+        ],
+        default = 'SGD',
+        tooltip = "What type of solver will be used?",
+    )
+
+    def validate_solver_type(form, field):
+        fw = frameworks.get_framework_by_id(form.framework)
+        if fw is not None:
+            if not fw.supports_solver_type(field.data):
+                raise validators.ValidationError(
+                    'Solver type not supported by this framework')
 
     ### Learning rate
 
@@ -247,8 +258,8 @@ class ModelForm(Form):
                 ],
             )
 
-    custom_network_snapshot = utils.forms.TextField('Pretrained model',
-                tooltip = "Path to pretrained model file. Only edit this field if you understand how fine-tuning works in caffe"
+    custom_network_snapshot = utils.forms.TextField('Pretrained model(s)',
+                tooltip = "Colon delimited paths to pretrained model files. Only edit this field if you understand how fine-tuning works in caffe or torch."
             )
 
 

@@ -1,32 +1,29 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
+from datetime import timedelta
 import io
 import json
 import math
 import tarfile
 import zipfile
-from datetime import timedelta
 
 import flask
 import werkzeug.exceptions
 
-
+from . import forms
+from . import images as model_images
+from . import ModelJob
 import digits
-from digits.webapp import app, scheduler, autodoc
+from digits import frameworks
 from digits.utils import time_filters
 from digits.utils.routing import request_wants_json
-from . import ModelJob
-import forms
-import images.views
-import images as model_images
+from digits.webapp import app, scheduler
 
-from digits import frameworks
+blueprint = flask.Blueprint(__name__, __name__)
 
-NAMESPACE = '/models/'
-
-@app.route(NAMESPACE, methods=['GET'])
-@autodoc(['models'])
-def models_index():
+@blueprint.route('', methods=['GET'])
+def index():
     column_attrs = list(get_column_attrs())
     raw_jobs = [j for j in scheduler.jobs.values() if isinstance(j, ModelJob)]
 
@@ -80,10 +77,9 @@ def models_index():
         jobs=jobs,
         attrs_and_labels=attrs_and_labels)
 
-@app.route(NAMESPACE + '<job_id>.json', methods=['GET'])
-@app.route(NAMESPACE + '<job_id>', methods=['GET'])
-@autodoc(['models', 'api'])
-def models_show(job_id):
+@blueprint.route('/<job_id>.json', methods=['GET'])
+@blueprint.route('/<job_id>', methods=['GET'])
+def show(job_id):
     """
     Show a ModelJob
 
@@ -105,9 +101,8 @@ def models_show(job_id):
             raise werkzeug.exceptions.BadRequest(
                     'Invalid job type')
 
-@app.route(NAMESPACE + 'customize', methods=['POST'])
-@autodoc('models')
-def models_customize():
+@blueprint.route('/customize', methods=['POST'])
+def customize():
     """
     Returns a customized file for the ModelJob based on completed form fields
     """
@@ -129,8 +124,7 @@ def models_customize():
         raise werkzeug.exceptions.NotFound('Job not found')
 
     snapshot = None
-    epoch = int(flask.request.form.get('snapshot_epoch', 0))
-    print 'epoch:',epoch
+    epoch = float(flask.request.form.get('snapshot_epoch', 0))
     if epoch == 0:
         pass
     elif epoch == -1:
@@ -146,9 +140,8 @@ def models_customize():
             'snapshot': snapshot
             })
 
-@app.route(NAMESPACE + 'visualize-network', methods=['POST'])
-@autodoc('models')
-def models_visualize_network():
+@blueprint.route('/visualize-network', methods=['POST'])
+def visualize_network():
     """
     Returns a visualization of the custom network as a string of PNG data
     """
@@ -161,9 +154,8 @@ def models_visualize_network():
 
     return ret
 
-@app.route(NAMESPACE + 'visualize-lr', methods=['POST'])
-@autodoc('models')
-def models_visualize_lr():
+@blueprint.route('/visualize-lr', methods=['POST'])
+def visualize_lr():
     """
     Returns a JSON object of data used to create the learning rate graph
     """
@@ -172,7 +164,7 @@ def models_visualize_lr():
     if policy == 'fixed':
         pass
     elif policy == 'step':
-        step = int(flask.request.form['lr_step_size'])
+        step = float(flask.request.form['lr_step_size'])
         gamma = float(flask.request.form['lr_step_gamma'])
     elif policy == 'multistep':
         steps = [float(s) for s in flask.request.form['lr_multistep_values'].split(',')]
@@ -212,13 +204,12 @@ def models_visualize_lr():
 
     return json.dumps({'data': {'columns': [data]}})
 
-@app.route(NAMESPACE + '<job_id>/download',
+@blueprint.route('/<job_id>/download',
         methods=['GET', 'POST'],
         defaults={'extension': 'tar.gz'})
-@app.route(NAMESPACE + '<job_id>/download.<extension>',
+@blueprint.route('/<job_id>/download.<extension>',
         methods=['GET', 'POST'])
-@autodoc('models')
-def models_download(job_id, extension):
+def download(job_id, extension):
     """
     Return a tarball of all files required to run the model
     """

@@ -1,16 +1,17 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import os
 import pickle
 import tempfile
 
-from status import Status
-from job import Job
+from .job import Job
+from .status import Status
 
 class TestStatus():
 
     def test_run_too_soon(self):
-        job = Job('test')
+        job = Job(name='testsuite-job', username='digits-testsuite')
         job.status = Status.WAIT
         job.status = Status.RUN
         # Status.WAIT should be removed so the len should be 2 rather
@@ -18,7 +19,7 @@ class TestStatus():
         assert len(job.status_history) == 2, 'history length should be 2'
 
     def test_empty_history(self):
-        job = Job('test')
+        job = Job(name='testsuite-job', username='digits-testsuite')
 
         job.status = Status.WAIT
         job.status = Status.RUN
@@ -28,9 +29,9 @@ class TestStatus():
         assert job.status == Status.INIT, 'status should be Status.INIT'
 
     def test_set_dict(self):
-        job = Job('test')
+        job = Job(name='testsuite-job', username='digits-testsuite')
 
-        # testing some untested cases in set_dict()
+        # Testing some untested cases in set_dict()
         job.status = Status.ERROR
         assert job.status.css == 'danger', 'status.css should be "danger".'
 
@@ -40,7 +41,7 @@ class TestStatus():
     def test_equality(self):
         s = Status(Status.INIT)
 
-        # testing __eq__
+        # Testing __eq__
         assert (s == Status.INIT), 'should be true.'
         assert (s == 'I'), 'should be true.'
         assert not (s == 7), 'should be false.'
@@ -51,7 +52,7 @@ class TestStatus():
 
 
     def test_pickle(self):
-        # Testng __setstate__ and __getstate__
+        # Testing __setstate__ and __getstate__
 
         s = Status(Status.INIT)
         s = Status.WAIT

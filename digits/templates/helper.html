@@ -1,4 +1,4 @@
-{# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved. #}
+{# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved. #}
 
 {% macro print_flashes() %}
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -50,4 +50,13 @@
         {{ ' has-error' if form.errors else '' }}
         {{ ' has-warning' if form.warnings else '' }}
     {% endfor %}
+{% endmacro %}
+
+{% macro serve_file(obj, path) %}
+    {% if path[0] == '/' %}
+        {# Absolute path - don't serve file for security reasons #}
+        {{path}}
+    {% else %}
+        <a href="{{url_for('digits.views.serve_file', path=obj.path(path, relative=True))}}">{{path}}</a>
+    {% endif %}
 {% endmacro %}

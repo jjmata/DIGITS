@@ -1,26 +1,27 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import os
-import time
-import shutil
-import traceback
-import signal
 from collections import OrderedDict
+import os
 import re
+import shutil
+import signal
+import time
+import traceback
 
 import flask
 import gevent
 import gevent.event
 import gevent.queue
 
-from config import config_value
 from . import utils
-from status import Status
-from job import Job
-from dataset import DatasetJob
-from model import ModelJob
+from .config import config_value
+from .dataset import DatasetJob
+from .job import Job
+from .log import logger
+from .model import ModelJob
+from .status import Status
 from digits.utils import errors
-from log import logger
 
 class Resource(object):
     """
@@ -100,6 +101,7 @@ class Scheduler:
                 'parse_folder_task_pool': [Resource()],
                 'create_db_task_pool': [Resource(max_value=2)],
                 'analyze_db_task_pool': [Resource(max_value=4)],
+                'inference_task_pool': [Resource(max_value=4)],
                 'gpus': [Resource(identifier=index)
                     for index in gpu_list.split(',')] if gpu_list else [],
                 }
@@ -147,7 +149,7 @@ class Scheduler:
                     job.load_dataset()
                     self.jobs[job.id()] = job
                 except Exception as e:
-                    failed_jobs.append((job.id(), e))
+                    failed_jobs.append((dir_name, e))
 
         logger.info('Loaded %d jobs.' % len(self.jobs))
 
@@ -216,6 +218,7 @@ class Scheduler:
             return False
 
         job.abort()
+        logger.info('Job aborted.', job_id=job_id)
         return True
 
     def delete_job(self, job):
@@ -385,7 +388,7 @@ class Scheduler:
                                 # job is done
                                 pass
                             elif task.status == Status.ERROR:
-                                # propogate error status up to job
+                                # propagate error status up to job
                                 job.status = Status.ERROR
                                 alldone = False
                                 break
@@ -402,8 +405,10 @@ class Scheduler:
                         if job.status.is_running():
                             job.save()
                     last_saved = time.time()
-
-                time.sleep(utils.wait_time())
+                if 'DIGITS_MODE_TEST' not in os.environ:
+                    time.sleep(utils.wait_time())
+                else:
+                    time.sleep(0.05)
         except KeyboardInterrupt:
             pass
 
@@ -484,7 +489,7 @@ class Scheduler:
 
     def emit_gpus_available(self):
         """
-        Call socketio.emit gpu availablity
+        Call socketio.emit gpu availability
         """
         from digits.webapp import scheduler, socketio
         socketio.emit('server update',

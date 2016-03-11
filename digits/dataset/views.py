@@ -1,19 +1,18 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import flask
 import werkzeug.exceptions
 
-from digits.webapp import app, scheduler, autodoc
+from . import images as dataset_images
 from digits.utils.routing import request_wants_json
-import images.views
-import images as dataset_images
+from digits.webapp import app, scheduler
 
-NAMESPACE = '/datasets/'
+blueprint = flask.Blueprint(__name__, __name__)
 
-@app.route(NAMESPACE + '<job_id>.json', methods=['GET'])
-@app.route(NAMESPACE + '<job_id>', methods=['GET'])
-@autodoc(['datasets', 'api'])
-def datasets_show(job_id):
+@blueprint.route('/<job_id>.json', methods=['GET'])
+@blueprint.route('/<job_id>', methods=['GET'])
+def show(job_id):
     """
     Show a DatasetJob
 

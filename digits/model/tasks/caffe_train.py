@@ -1,24 +1,29 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
+from collections import OrderedDict
+import copy
+import math
+import operator
 import os
 import re
-import time
-import math
 import subprocess
-import operator
 import sys
+import time
 
+from google.protobuf import text_format
 import numpy as np
 import scipy
-from google.protobuf import text_format
-import caffe
-import caffe_pb2
 
-from train import TrainTask
+from .train import TrainTask
+from digits import utils, dataset
 from digits.config import config_value
 from digits.status import Status
-from digits import utils, dataset
 from digits.utils import subclass, override, constants
+
+# Must import after importing digit.config
+import caffe
+import caffe_pb2
 
 # NOTE: Increment this everytime the pickled object changes
 PICKLE_VERSION = 3
@@ -28,6 +33,15 @@ CAFFE_SOLVER_FILE = 'solver.prototxt'
 CAFFE_TRAIN_VAL_FILE = 'train_val.prototxt'
 CAFFE_SNAPSHOT_PREFIX = 'snapshot'
 CAFFE_DEPLOY_FILE = 'deploy.prototxt'
+
+@subclass
+class Error(Exception):
+    pass
+
+@subclass
+class CaffeTrainSanityCheckError(Error):
+    """A sanity check failed"""
+    pass
 
 @subclass
 class CaffeTrainTask(TrainTask):
@@ -41,6 +55,14 @@ class CaffeTrainTask(TrainTask):
     def upgrade_network(network):
         #TODO
         pass
+
+    @staticmethod
+    def set_mode(gpu):
+        if gpu is not None:
+            caffe.set_device(gpu)
+            caffe.set_mode_gpu()
+        else:
+            caffe.set_mode_cpu()
 
     def __init__(self, **kwargs):
         """
@@ -400,6 +422,12 @@ class CaffeTrainTask(TrainTask):
         with open(self.path(self.train_val_file), 'w') as outfile:
             text_format.PrintMessage(train_val_network, outfile)
 
+        # network sanity checks
+        self.logger.debug("Network sanity check - train")
+        CaffeTrainTask.net_sanity_check(train_val_network, caffe_pb2.TRAIN)
+        self.logger.debug("Network sanity check - val")
+        CaffeTrainTask.net_sanity_check(train_val_network, caffe_pb2.TEST)
+
         ### Write deploy file
 
         deploy_network = caffe_pb2.NetParameter()
@@ -429,6 +457,10 @@ class CaffeTrainTask(TrainTask):
 
         with open(self.path(self.deploy_file), 'w') as outfile:
             text_format.PrintMessage(deploy_network, outfile)
+
+        # network sanity checks
+        self.logger.debug("Network sanity check - deploy")
+        CaffeTrainTask.net_sanity_check(deploy_network, caffe_pb2.TEST)
 
         ### Write solver file
 
@@ -478,7 +510,7 @@ class CaffeTrainTask(TrainTask):
             solver.stepsize = int(math.ceil(float(self.lr_policy['stepsize']) * scale))
             solver.gamma = self.lr_policy['gamma']
         elif solver.lr_policy == 'multistep':
-            for value in self.lr_policy['stepvalue']:
+            for value in self.lr_policy['stepvalue'].split(','):
                 # stepvalue = stepvalue * scale
                 solver.stepvalue.append(int(math.ceil(float(value) * scale)))
             solver.gamma = self.lr_policy['gamma']
@@ -499,8 +531,15 @@ class CaffeTrainTask(TrainTask):
         else:
             raise Exception('Unknown lr_policy: "%s"' % solver.lr_policy)
 
+        # These solver types don't support momentum
+        unsupported = [solver.ADAGRAD]
+        try:
+            unsupported.append(solver.RMSPROP)
+        except AttributeError:
+            pass
+
         # go with the suggested defaults
-        if solver.solver_type != solver.ADAGRAD:
+        if solver.solver_type not in unsupported:
             solver.momentum = 0.9
         solver.weight_decay = 0.0005
 
@@ -518,7 +557,6 @@ class CaffeTrainTask(TrainTask):
         self.solver = solver # save for later
 
         return True
-
 
     def save_files_generic(self):
         """
@@ -609,6 +647,12 @@ class CaffeTrainTask(TrainTask):
         with open(self.path(self.train_val_file), 'w') as outfile:
             text_format.PrintMessage(train_val_network, outfile)
 
+        # network sanity checks
+        self.logger.debug("Network sanity check - train")
+        CaffeTrainTask.net_sanity_check(train_val_network, caffe_pb2.TRAIN)
+        self.logger.debug("Network sanity check - val")
+        CaffeTrainTask.net_sanity_check(train_val_network, caffe_pb2.TEST)
+
         ### Write deploy file
 
         deploy_network = caffe_pb2.NetParameter()
@@ -632,6 +676,10 @@ class CaffeTrainTask(TrainTask):
 
         with open(self.path(self.deploy_file), 'w') as outfile:
             text_format.PrintMessage(deploy_network, outfile)
+
+        # network sanity checks
+        self.logger.debug("Network sanity check - deploy")
+        CaffeTrainTask.net_sanity_check(deploy_network, caffe_pb2.TEST)
 
         ### Write solver file
 
@@ -681,7 +729,7 @@ class CaffeTrainTask(TrainTask):
             solver.stepsize = int(math.ceil(float(self.lr_policy['stepsize']) * scale))
             solver.gamma = self.lr_policy['gamma']
         elif solver.lr_policy == 'multistep':
-            for value in self.lr_policy['stepvalue']:
+            for value in self.lr_policy['stepvalue'].split(','):
                 # stepvalue = stepvalue * scale
                 solver.stepvalue.append(int(math.ceil(float(value) * scale)))
             solver.gamma = self.lr_policy['gamma']
@@ -702,8 +750,15 @@ class CaffeTrainTask(TrainTask):
         else:
             raise Exception('Unknown lr_policy: "%s"' % solver.lr_policy)
 
+        # These solver types don't support momentum
+        unsupported = [solver.ADAGRAD]
+        try:
+            unsupported.append(solver.RMSPROP)
+        except AttributeError:
+            pass
+
         # go with the suggested defaults
-        if solver.solver_type != solver.ADAGRAD:
+        if solver.solver_type not in unsupported:
             solver.momentum = 0.9
         solver.weight_decay = 0.0005
 
@@ -798,7 +853,7 @@ class CaffeTrainTask(TrainTask):
                 else:
                     args.append('--gpu=%s' % ','.join(identifiers))
         if self.pretrained_model:
-            args.append('--weights=%s' % self.path(self.pretrained_model))
+            args.append('--weights=%s' % ','.join(map(lambda x: self.path(x), self.pretrained_model.split(':'))))
 
         return args
 
@@ -1012,65 +1067,20 @@ class CaffeTrainTask(TrainTask):
         return False
 
     @override
-    def infer_one(self, data, snapshot_epoch=None, layers=None):
-        if isinstance(self.dataset, dataset.ImageClassificationDatasetJob):
-            return self.classify_one(data,
+    def infer_one(self, data, snapshot_epoch=None, layers=None, gpu=None):
+        if isinstance(self.dataset, dataset.ImageClassificationDatasetJob) or isinstance(self.dataset, dataset.GenericImageDatasetJob):
+            return self.infer_one_image(data,
                     snapshot_epoch=snapshot_epoch,
                     layers=layers,
-                    )
-        elif isinstance(self.dataset, dataset.GenericImageDatasetJob):
-            return self.infer_one_generic(data,
-                    snapshot_epoch=snapshot_epoch,
-                    layers=layers,
+                    gpu=gpu,
                     )
         raise NotImplementedError()
 
-    def classify_one(self, image, snapshot_epoch=None, layers=None):
-        """
-        Classify an image
-        Returns (predictions, visualizations)
-            predictions -- an array of [ (label, confidence), ...] for each label, sorted by confidence
-            visualizations -- a list of dicts for the specified layers
-        Returns (None, None) if something goes wrong
-
-        Arguments:
-        image -- a np.array
-
-        Keyword arguments:
-        snapshot_epoch -- which snapshot to use
-        layers -- which layer activation[s] and weight[s] to visualize
-        """
-        labels = self.get_labels()
-        net = self.get_net(snapshot_epoch)
-
-        # process image
-        if image.ndim == 2:
-            image = image[:,:,np.newaxis]
-        preprocessed = self.get_transformer().preprocess(
-                'data', image)
-
-        # reshape net input (if necessary)
-        test_shape = (1,) + preprocessed.shape
-        if net.blobs['data'].data.shape != test_shape:
-            net.blobs['data'].reshape(*test_shape)
-
-        # run inference
-        net.blobs['data'].data[...] = preprocessed
-        output = net.forward()
-        scores = output[net.outputs[-1]].flatten()
-        indices = (-scores).argsort()
-        predictions = []
-        for i in indices:
-            predictions.append( (labels[i], scores[i]) )
-
-        visualizations = self.get_layer_visualizations(net, layers)
-        return (predictions, visualizations)
-
-    def infer_one_generic(self, image, snapshot_epoch=None, layers=None):
+    def infer_one_image(self, image, snapshot_epoch=None, layers=None, gpu=None):
         """
         Run inference on one image for a generic model
         Returns (output, visualizations)
-            output -- an dict of string -> np.ndarray
+            output -- an OrderedDict of string -> np.ndarray
             visualizations -- a list of dicts for the specified layers
         Returns (None, None) if something goes wrong
 
@@ -1081,7 +1091,7 @@ class CaffeTrainTask(TrainTask):
         snapshot_epoch -- which snapshot to use
         layers -- which layer activation[s] and weight[s] to visualize
         """
-        net = self.get_net(snapshot_epoch)
+        net = self.get_net(snapshot_epoch, gpu=gpu)
 
         # process image
         if image.ndim == 2:
@@ -1096,7 +1106,13 @@ class CaffeTrainTask(TrainTask):
 
         # run inference
         net.blobs['data'].data[...] = preprocessed
-        output = net.forward()
+        o = net.forward()
+
+        # order outputs in prototxt order
+        output = OrderedDict()
+        for blob in net.blobs.keys():
+            if blob in o:
+                output[blob] = o[blob]
 
         visualizations = self.get_layer_visualizations(net, layers)
         return (output, visualizations)
@@ -1111,7 +1127,6 @@ class CaffeTrainTask(TrainTask):
             if layers == 'all':
                 added_activations = []
                 for layer in self.network.layer:
-                    print 'Computing visualizations for "%s" ...' % layer.name
                     for bottom in layer.bottom:
                         if bottom in net.blobs and bottom not in added_activations:
                             data = net.blobs[bottom].data[0]
@@ -1122,7 +1137,7 @@ class CaffeTrainTask(TrainTask):
                                     {
                                         'name': str(bottom),
                                         'vis_type': 'Activation',
-                                        'image_html': utils.image.embed_image_html(vis),
+                                        'vis': vis,
                                         'data_stats': {
                                             'shape': data.shape,
                                             'mean': mean,
@@ -1152,9 +1167,9 @@ class CaffeTrainTask(TrainTask):
                                     'vis_type': 'Weights',
                                     'layer_type': layer.type,
                                     'param_count': parameter_count,
-                                    'image_html': utils.image.embed_image_html(vis),
+                                    'vis': vis,
                                     'data_stats': {
-                                        'shape':data.shape,
+                                        'shape': data.shape,
                                         'mean': mean,
                                         'stddev': std,
                                         'histogram': hist,
@@ -1176,7 +1191,7 @@ class CaffeTrainTask(TrainTask):
                                     {
                                         'name': str(top),
                                         'vis_type': 'Activation',
-                                        'image_html': utils.image.embed_image_html(vis),
+                                        'vis': vis,
                                         'data_stats': {
                                             'shape': data.shape,
                                             'mean': mean,
@@ -1217,23 +1232,14 @@ class CaffeTrainTask(TrainTask):
         return False
 
     @override
-    def infer_many(self, data, snapshot_epoch=None):
-        if isinstance(self.dataset, dataset.ImageClassificationDatasetJob):
-            return self.classify_many(data, snapshot_epoch=snapshot_epoch)
-        elif isinstance(self.dataset, dataset.GenericImageDatasetJob):
-            return self.infer_many_generic(data, snapshot_epoch=snapshot_epoch)
+    def infer_many(self, data, snapshot_epoch=None, gpu=None):
+        if isinstance(self.dataset, dataset.ImageClassificationDatasetJob) or isinstance(self.dataset, dataset.GenericImageDatasetJob):
+            return self.infer_many_images(data, snapshot_epoch=snapshot_epoch, gpu=gpu)
         raise NotImplementedError()
 
-    def classify_many(self, images, snapshot_epoch=None):
+    def infer_many_images(self, images, snapshot_epoch=None, gpu=None):
         """
-        Returns (labels, results):
-        labels -- an array of strings
-        results -- a 2D np array:
-            [
-                [image0_label0_confidence, image0_label1_confidence, ...],
-                [image1_label0_confidence, image1_label1_confidence, ...],
-                ...
-            ]
+        Returns a list of OrderedDict, one for each image
 
         Arguments:
         images -- a list of np.arrays
@@ -1241,8 +1247,7 @@ class CaffeTrainTask(TrainTask):
         Keyword arguments:
         snapshot_epoch -- which snapshot to use
         """
-        labels = self.get_labels()
-        net = self.get_net(snapshot_epoch)
+        net = self.get_net(snapshot_epoch, gpu=gpu)
 
         caffe_images = []
         for image in images:
@@ -1250,54 +1255,6 @@ class CaffeTrainTask(TrainTask):
                 caffe_images.append(image[:,:,np.newaxis])
             else:
                 caffe_images.append(image)
-
-        caffe_images = np.array(caffe_images)
-
-        data_shape = tuple(self.get_transformer().inputs['data'])[1:]
-
-        if self.batch_size:
-            data_shape = (self.batch_size,) + data_shape
-        # TODO: grab batch_size from the TEST phase in train_val network
-        else:
-            data_shape = (constants.DEFAULT_BATCH_SIZE,) + data_shape
-
-        scores = None
-        for chunk in [caffe_images[x:x+data_shape[0]] for x in xrange(0, len(caffe_images), data_shape[0])]:
-            new_shape = (len(chunk),) + data_shape[1:]
-            if net.blobs['data'].data.shape != new_shape:
-                net.blobs['data'].reshape(*new_shape)
-            for index, image in enumerate(chunk):
-                net.blobs['data'].data[index] = self.get_transformer().preprocess(
-                        'data', image)
-            output = net.forward()[net.outputs[-1]]
-            if scores is None:
-                scores = np.copy(output)
-            else:
-                scores = np.vstack((scores, output))
-            print 'Processed %s/%s images' % (len(scores), len(caffe_images))
-
-        return (labels, scores)
-
-    def infer_many_generic(self, images, snapshot_epoch=None):
-        """
-        Returns a list of np.ndarrays, one for each image
-
-        Arguments:
-        images -- a list of np.arrays
-
-        Keyword arguments:
-        snapshot_epoch -- which snapshot to use
-        """
-        net = self.get_net(snapshot_epoch)
-
-        caffe_images = []
-        for image in images:
-            if image.ndim == 2:
-                caffe_images.append(image[:,:,np.newaxis])
-            else:
-                caffe_images.append(image)
-
-        caffe_images = np.array(caffe_images)
 
         data_shape = tuple(self.get_transformer().inputs['data'])[1:]
 
@@ -1316,10 +1273,17 @@ class CaffeTrainTask(TrainTask):
                 net.blobs['data'].data[index] = self.get_transformer().preprocess(
                         'data', image)
             o = net.forward()
+
+            # order output in prototxt order
+            output = OrderedDict()
+            for blob in net.blobs.keys():
+                if blob in o:
+                    output[blob] = o[blob]
+
             if outputs is None:
-                outputs = o
+                outputs = copy.deepcopy(output)
             else:
-                for name,blob in o.iteritems():
+                for name,blob in output.iteritems():
                     outputs[name] = np.vstack((outputs[name], blob))
             print 'Processed %s/%s images' % (len(outputs[outputs.keys()[0]]), len(caffe_images))
 
@@ -1331,7 +1295,7 @@ class CaffeTrainTask(TrainTask):
         """
         return len(self.snapshots) > 0
 
-    def get_net(self, epoch=None):
+    def get_net(self, epoch=None, gpu=-1):
         """
         Returns an instance of caffe.Net
 
@@ -1359,9 +1323,7 @@ class CaffeTrainTask(TrainTask):
                 and hasattr(self, '_caffe_net') and self._caffe_net is not None:
             return self._caffe_net
 
-        if config_value('caffe_root')['cuda_enabled'] and\
-                config_value('gpu_list'):
-            caffe.set_mode_gpu()
+        CaffeTrainTask.set_mode(gpu)
 
         # Add job_dir to PATH to pick up any python layers used by the model
         sys.path.append(self.job_dir)
@@ -1473,3 +1435,40 @@ class CaffeTrainTask(TrainTask):
         return text description of model
         """
         return text_format.MessageToString(self.network)
+
+    @staticmethod
+    def net_sanity_check(net, phase):
+        """
+        Perform various sanity checks on the network, including:
+        - check that all layer bottoms are included at the specified stage
+        """
+        assert phase == caffe_pb2.TRAIN or phase == caffe_pb2.TEST, "Unknown phase: %s" % repr(phase)
+        # work out which layers and tops are included at the specified phase
+        layers = []
+        tops = []
+        for layer in net.layer:
+            if len(layer.include)>0:
+                mask = 0 # include none by default
+                for rule in layer.include:
+                    mask = mask | (1<<rule.phase)
+            elif len(layer.exclude)>0:
+                # include and exclude rules are mutually exclusive as per Caffe spec
+                mask = (1<<caffe_pb2.TRAIN) | (1<<caffe_pb2.TEST) # include all by default
+                for rule in layer.exclude:
+                    mask = mask & ~(1<<rule.phase)
+            else:
+                mask = (1<<caffe_pb2.TRAIN) | (1<<caffe_pb2.TEST)
+            if mask & (1<<phase):
+                # layer will be included at this stage
+                layers.append(layer)
+                tops.extend(layer.top)
+        # add inputs
+        tops.extend(net.input)
+        # now make sure all bottoms are present at this stage
+        for layer in layers:
+            for bottom in layer.bottom:
+                if bottom not in tops:
+                    raise CaffeTrainSanityCheckError("Layer '%s' references bottom '%s' at the %s stage however " \
+                                                     "this blob is not included at that stage. Please consider " \
+                                                     "using an include directive to limit the scope of this layer." % (
+                                                       layer.name, bottom, "TRAIN" if phase == caffe_pb2.TRAIN else "TEST"))

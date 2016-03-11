@@ -1,5 +1,5 @@
 --[[
-Copyright (c) 2015, NVIDIA CORPORATION. All rights reserved.
+Copyright (c) 2015-2016, NVIDIA CORPORATION. All rights reserved.
 
 Copyright (c) 2004 Elad Hoffer
 
@@ -46,7 +46,7 @@ end
 
 function Optimizer:optimize(x,yt)
     local f_eval = function()
-        self.Gradients:zero()
+        self.Model:zeroGradParameters()
         local y = self.Model:forward(x)
         -- get label
         label = self.LabelFunction(x,yt)
@@ -65,5 +65,6 @@ function Optimizer:optimize(x,yt)
     end
 
     return value, self.OptState.learningRate, self.OptFunction(f_eval, self.Weights, self.OptState)
+
 end
 

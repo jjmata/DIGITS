@@ -300,7 +300,7 @@ local valBatchSize
 if opt.batchSize==0 then
     local defaultBatchSize = 16
     trainBatchSize = network.trainBatchSize or defaultBatchSize
-    valBatchSize = network.validBatchSize or defaultBatchSize
+    valBatchSize = network.validationBatchSize or defaultBatchSize
 else
     trainBatchSize = opt.batchSize
     valBatchSize = opt.batchSize
@@ -384,6 +384,13 @@ if network.fineTuneHook then
     model = network.fineTuneHook(model)
     logmessage.display(0,'Network definition: \n' .. model:__tostring())
     logmessage.display(0,'Network definition ends')
+end
+
+if network.inputHook then
+    trainDataLoader:setInputHook(network.inputHook)
+    if valDataLoader then
+        valDataLoader:setInputHook(network.inputHook)
+    end
 end
 
 -- switch to float or cuda

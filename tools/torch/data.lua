@@ -307,6 +307,11 @@ function DBSource:setCropLen(croplen)
     end
 end
 
+-- Derived class method setInputHook
+function DBSource:setInputHook(hook)
+    self.inputHook = hook
+end
+
 -- Derived class method inputTensorShape
 -- This returns the shape of the input samples in the database
 -- There is an assumption that all input samples have the same shape
@@ -465,6 +470,11 @@ function DBSource:nextBatch (batchsize, idx)
 
         Labels[i] = label
     end
+
+    if self.inputHook then
+        Images = self.inputHook(Images)
+    end
+
     return Images, Labels
 end
 
@@ -644,6 +654,24 @@ function DataLoader:setCropLen(croplen)
                     function()
                         if db then
                             db:setCropLen(croplen)
+                        end
+                    end
+                )
+    end
+    -- return to non-specific mode
+    self.threadPool:specific(false)
+end
+
+-- set crop length (calls setCropLen() method of all DB intances)
+function DataLoader:setInputHook(hook)
+    -- switch to specific mode so we can specify which thread to add job to
+    self.threadPool:specific(true)
+    for i=1,self.numThreads do
+        self.threadPool:addjob(
+                    i,
+                    function()
+                        if db then
+                            db:setInputHook(hook)
                         end
                     end
                 )

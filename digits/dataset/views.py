@@ -5,6 +5,7 @@ import flask
 import werkzeug.exceptions
 
 from . import images as dataset_images
+from . import generic
 from digits.utils.routing import request_wants_json
 from digits.webapp import app, scheduler
 
@@ -30,6 +31,8 @@ def show(job_id):
             return dataset_images.classification.views.show(job)
         elif isinstance(job, dataset_images.GenericImageDatasetJob):
             return dataset_images.generic.views.show(job)
+        elif isinstance(job, generic.GenericDatasetJob):
+            return generic.views.show(job)
         else:
             raise werkzeug.exceptions.BadRequest('Invalid job type')
 

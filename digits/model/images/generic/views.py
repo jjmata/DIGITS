@@ -10,15 +10,14 @@ import werkzeug.exceptions
 
 from .forms import GenericImageModelForm
 from .job import GenericImageModelJob
-from digits import frameworks
-from digits import utils
+from digits import extensions, frameworks, utils
 from digits.config import config_value
-from digits.dataset import GenericImageDatasetJob
+from digits.dataset import GenericDatasetJob, GenericImageDatasetJob
 from digits.inference import ImageInferenceJob
 from digits.status import Status
 from digits.utils import filesystem as fs
 from digits.utils.forms import fill_form_if_cloned, save_form_to_job
-from digits.utils.routing import request_wants_json, job_from_request
+from digits.utils.routing import get_request_arg, request_wants_json, job_from_request
 from digits.webapp import app, scheduler
 
 blueprint = flask.Blueprint(__name__, __name__)
@@ -29,8 +28,11 @@ def new():
     """
     Return a form for a new GenericImageModelJob
     """
+    # get extension_id (will default to None if unspecified)
+    extension_id = get_request_arg('extension_id')
+
     form = GenericImageModelForm()
-    form.dataset.choices = get_datasets()
+    form.dataset.choices = get_datasets(extension_id)
     form.standard_networks.choices = []
     form.previous_networks.choices = get_previous_networks()
 
@@ -40,6 +42,8 @@ def new():
     fill_form_if_cloned(form)
 
     return flask.render_template('models/images/generic/new.html',
+            extension_id = extension_id,
+            extension_title = extensions.data.get_extension(extension_id).get_title() if extension_id else None,
             form = form,
             frameworks = frameworks.get_frameworks(),
             previous_network_snapshots = prev_network_snapshots,
@@ -56,8 +60,12 @@ def create():
 
     Returns JSON when requested: {job_id,name,status} or {errors:[]}
     """
+
+    # get extension_id (will default to None if unspecified)
+    extension_id = get_request_arg('extension_id')
+
     form = GenericImageModelForm()
-    form.dataset.choices = get_datasets()
+    form.dataset.choices = get_datasets(extension_id)
     form.standard_networks.choices = []
     form.previous_networks.choices = get_previous_networks()
 
@@ -71,6 +79,8 @@ def create():
             return flask.jsonify({'errors': form.errors}), 400
         else:
             return flask.render_template('models/images/generic/new.html',
+                    extension_id = extension_id,
+                    extension_title = extensions.data.get_extension(extension_id).get_title() if extension_id else None,
                     form = form,
                     frameworks = frameworks.get_frameworks(),
                     previous_network_snapshots = prev_network_snapshots,
@@ -251,7 +261,9 @@ def show(job):
     """
     Called from digits.model.views.models_show()
     """
-    return flask.render_template('models/images/generic/show.html', job=job)
+    data_extension_id =  job.dataset.extension_id if isinstance(job.dataset, GenericDatasetJob) else None
+    view_extensions = get_view_extensions(data_extension_id)
+    return flask.render_template('models/images/generic/show.html', job=job, view_extensions=view_extensions)
 
 @blueprint.route('/large_graph', methods=['GET'])
 def large_graph():
@@ -306,7 +318,7 @@ def infer_one():
     inference_job.wait_completion()
 
     # retrieve inference data
-    inputs, outputs, visualizations = inference_job.get_data()
+    inputs, outputs, model_visualization = inference_job.get_data()
 
     # delete job folder and remove from scheduler list
     scheduler.delete_job(inference_job)
@@ -315,19 +327,21 @@ def infer_one():
         os.remove(image_path)
 
     image = None
+    inference_view_html = None
     if inputs is not None and len(inputs['data']) == 1:
         image = utils.image.embed_image_html(inputs['data'][0])
+        inference_view_html = get_inference_visualizations(model_job.dataset, inputs, outputs)[0]
 
     if request_wants_json():
         return flask.jsonify({'outputs': dict((name, blob.tolist()) for name,blob in outputs.iteritems())})
     else:
         return flask.render_template('models/images/generic/infer_one.html',
-                model_job       = model_job,
-                job             = inference_job,
-                image_src       = image,
-                network_outputs = outputs,
-                visualizations  = visualizations,
-                total_parameters= sum(v['param_count'] for v in visualizations if v['vis_type'] == 'Weights'),
+                model_job           = model_job,
+                job                 = inference_job,
+                image_src           = image,
+                inference_view_html = inference_view_html,
+                visualizations      = model_visualization,
+                total_parameters    = sum(v['param_count'] for v in model_visualization if v['vis_type'] == 'Weights'),
                 )
 
 @blueprint.route('/infer_db.json', methods=['POST'])
@@ -376,8 +390,10 @@ def infer_db():
         # an error occurred
         outputs = None
 
+    inference_views_html = None
     if inputs is not None:
         keys = [str(idx) for idx in inputs['ids']]
+        inference_views_html = get_inference_visualizations(model_job.dataset, inputs, outputs)
     else:
         keys = None
 
@@ -388,10 +404,10 @@ def infer_db():
         return flask.jsonify({'outputs': result})
     else:
         return flask.render_template('models/images/generic/infer_db.html',
-                model_job       = model_job,
-                job             = inference_job,
-                keys            = keys,
-                network_outputs = outputs,
+                model_job            = model_job,
+                job                  = inference_job,
+                keys                 = keys,
+                inference_views_html = inference_views_html,
                 )
 
 @blueprint.route('/infer_many.json', methods=['POST'])
@@ -486,26 +502,21 @@ def infer_many():
                 network_outputs = outputs,
                 )
 
-def get_datasets():
-    return [(j.id(), j.name()) for j in sorted(
-        [j for j in scheduler.jobs.values() if isinstance(j, GenericImageDatasetJob) and (j.status.is_running() or j.status == Status.DONE)],
-        cmp=lambda x,y: cmp(y.id(), x.id())
-        )
-        ]
+def get_datasets(extension_id):
+    if extension_id:
+        jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericDatasetJob) and
+                    j.extension_id == extension_id and (j.status.is_running() or j.status == Status.DONE)]
+    else:
+        jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageDatasetJob) and (j.status.is_running() or j.status == Status.DONE)]
+    return [(j.id(), j.name()) for j in sorted(jobs, cmp=lambda x,y: cmp(y.id(), x.id()))]
 
 def get_previous_networks():
-    return [(j.id(), j.name()) for j in sorted(
-        [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)],
-        cmp=lambda x,y: cmp(y.id(), x.id())
-        )
-        ]
+    jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)]
+    return [(j.id(), j.name()) for j in sorted(jobs, cmp=lambda x,y: cmp(y.id(), x.id()))]
 
 def get_previous_networks_fulldetails():
-    return [(j) for j in sorted(
-        [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)],
-        cmp=lambda x,y: cmp(y.id(), x.id())
-        )
-        ]
+    jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)]
+    return [(j) for j in sorted(jobs, cmp=lambda x,y: cmp(y.id(), x.id()))]
 
 def get_previous_network_snapshots():
     prev_network_snapshots = []
@@ -517,4 +528,3 @@ def get_previous_network_snapshots():
             e.insert(0, (-1, 'Previous pretrained model'))
         prev_network_snapshots.append(e)
     return prev_network_snapshots
-

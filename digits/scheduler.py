@@ -102,6 +102,7 @@ class Scheduler:
                 'create_db_task_pool': [Resource(max_value=2)],
                 'analyze_db_task_pool': [Resource(max_value=4)],
                 'inference_task_pool': [Resource(max_value=4)],
+                'data_ingestion_task_pool': [Resource(max_value=4)],
                 'gpus': [Resource(identifier=index)
                     for index in gpu_list.split(',')] if gpu_list else [],
                 }

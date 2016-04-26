@@ -15,6 +15,7 @@ from .config import config_value
 from .webapp import app, socketio, scheduler
 import digits
 from digits import dataset, model, utils
+from digits import extensions
 from digits.log import logger
 from digits.utils.routing import request_wants_json
 
@@ -51,22 +52,37 @@ def home():
             data['server_name'] = config_value('server_name')
         return flask.jsonify(data)
     else:
-        new_dataset_options = [
-                ('Images', [
+        new_dataset_options = {
+                'Images': [
                     {
                         'title': 'Classification',
                         'id': 'image-classification',
                         'url': flask.url_for('digits.dataset.images.classification.views.new'),
                         },
-                    {
+                    ],
+                }
+
+        data_extensions = extensions.data.get_extensions()
+        for extension in data_extensions:
+            ext_category = extension.get_category()
+            ext_title = extension.get_title()
+            ext_id = extension.get_id()
+            if ext_category not in new_dataset_options:
+                new_dataset_options[ext_category] = []
+            new_dataset_options[ext_category].append({
+                    'title': ext_title,
+                    'id': ext_id,
+                    'url': flask.url_for('digits.dataset.generic.views.new', extension_id=ext_id),
+                })
+
+        new_dataset_options['Images'].append({
                         'title': 'Other',
                         'id': 'image-generic',
                         'url': flask.url_for('digits.dataset.images.generic.views.new'),
-                        },
-                    ])
-                ]
-        new_model_options = [
-                ('Images', [
+                        })
+
+        new_model_options = {
+                'Images': [
                     {
                         'title': 'Classification',
                         'id': 'image-classification',
@@ -77,8 +93,8 @@ def home():
                         'id': 'image-generic',
                         'url': flask.url_for('digits.model.images.generic.views.new'),
                         },
-                    ])
-                ]
+                    ]
+                }
 
         return flask.render_template('home.html',
                 new_dataset_options = new_dataset_options,

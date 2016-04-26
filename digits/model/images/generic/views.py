@@ -13,7 +13,7 @@ from .job import GenericImageModelJob
 from digits import frameworks
 from digits import utils
 from digits.config import config_value
-from digits.dataset import GenericImageDatasetJob
+from digits.dataset import GenericDatasetJob, GenericImageDatasetJob
 from digits.inference import ImageInferenceJob
 from digits.status import Status
 from digits.utils import filesystem as fs
@@ -456,7 +456,8 @@ def infer_many():
 
 def get_datasets():
     return [(j.id(), j.name()) for j in sorted(
-        [j for j in scheduler.jobs.values() if isinstance(j, GenericImageDatasetJob) and (j.status.is_running() or j.status == Status.DONE)],
+        [j for j in scheduler.jobs.values() if (isinstance(j, GenericImageDatasetJob)
+            or isinstance(j, GenericDatasetJob)) and (j.status.is_running() or j.status == Status.DONE)],
         cmp=lambda x,y: cmp(y.id(), x.id())
         )
         ]

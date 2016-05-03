@@ -77,7 +77,8 @@ def create(extension_id):
             username            = utils.auth.get_username(),
             name                = form.dataset_name.data,
             backend             = form.backend.data,
-            encoding            = form.encoding.data,
+            feature_encoding    = form.feature_encoding.data,
+            label_encoding      = form.label_encoding.data,
             extension_id        = extension_id,
             extension_userdata  = extension.get_user_data(),
             )

@@ -33,10 +33,15 @@ New {{ extension_title }} Dataset
 
     <div class="row">
         <div class="col-sm-6 col-sm-offset-3 well">
-            <div class="form-group{{mark_errors([form.encoding])}}">
-                {{form.encoding.label}}
-                {{form.encoding.tooltip}}
-                {{form.encoding(class='form-control')}}
+            <div class="form-group{{mark_errors([form.feature_encoding])}}">
+                {{form.feature_encoding.label}}
+                {{form.feature_encoding.tooltip}}
+                {{form.feature_encoding(class='form-control')}}
+            </div>
+            <div class="form-group{{mark_errors([form.label_encoding])}}">
+                {{form.label_encoding.label}}
+                {{form.label_encoding.tooltip}}
+                {{form.label_encoding(class='form-control')}}
             </div>
              <div class="form-group{{mark_errors([form.backend])}}">
                 {{ form.backend.label }}

@@ -15,8 +15,18 @@ class GenericDatasetForm(DatasetForm):
     Defines the form used to create a new GenericDatasetJob
     """
 
-    encoding = utils.forms.SelectField('Image Encoding',
+    feature_encoding = utils.forms.SelectField('Feature Encoding',
             default = 'png',
+            choices = [
+                ('none', 'None'),
+                ('png', 'PNG (lossless)'),
+                ('jpg', 'JPEG (lossy, 90% quality)'),
+                ],
+            tooltip = "Using either of these compression formats can save disk space, but can also require marginally more time for training."
+            )
+
+    label_encoding = utils.forms.SelectField('Label Encoding',
+            default = 'none',
             choices = [
                 ('none', 'None'),
                 ('png', 'PNG (lossless)'),

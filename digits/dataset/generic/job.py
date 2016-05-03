@@ -14,9 +14,10 @@ class GenericDatasetJob(DatasetJob):
     A Job that creates a dataset using a user-defined extension
     """
 
-    def __init__(self, backend, encoding, extension_id, extension_userdata, **kwargs):
+    def __init__(self, backend, feature_encoding, label_encoding, extension_id, extension_userdata, **kwargs):
         self.backend = backend
-        self.encoding = encoding
+        self.feature_encoding = feature_encoding
+        self.label_encoding = label_encoding
         self.extension_id = extension_id
         self.extension_userdata = extension_userdata
 

@@ -38,7 +38,7 @@ class DataIngestion(DataIngestionInterface):
         Return numpy.ndarray
         """
         source_image_file = entry[0]
-        target_image_file = entry[0]
+        target_image_file = entry[1]
 
         source_image = self.encode_PIL_Image(image.load_image(source_image_file))
         target_image = self.encode_PIL_Image(image.load_image(target_image_file))

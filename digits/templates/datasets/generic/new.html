@@ -43,7 +43,17 @@ New {{ extension_title }} Dataset
                 {{form.label_encoding.tooltip}}
                 {{form.label_encoding(class='form-control')}}
             </div>
-             <div class="form-group{{mark_errors([form.backend])}}">
+            <div class="form-group{{mark_errors([form.batch_size])}}">
+                {{ form.batch_size.label }}
+                {{ form.batch_size.tooltip }}
+                {{ form.batch_size(class='form-control') }}
+            </div>
+            <div class="form-group{{mark_errors([form.num_threads])}}">
+                {{ form.num_threads.label }}
+                {{ form.num_threads.tooltip }}
+                {{ form.num_threads(class='form-control') }}
+            </div>
+            <div class="form-group{{mark_errors([form.backend])}}">
                 {{ form.backend.label }}
                 {{ form.backend.tooltip }}
                 {{ form.backend(class='form-control') }}

@@ -3,9 +3,11 @@ from __future__ import absolute_import
 
 from . import kittiObjectDetection
 from . import imageGradients
+from . import imageReconstruction
 
 data_extensions = {
 	imageGradients.DataIngestion,
+	imageReconstruction.DataIngestion,
 }
 
 def get_extensions():

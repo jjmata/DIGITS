@@ -79,6 +79,8 @@ def create(extension_id):
             backend             = form.backend.data,
             feature_encoding    = form.feature_encoding.data,
             label_encoding      = form.label_encoding.data,
+            batch_size          = int(form.batch_size.data),
+            num_threads         = int(form.num_threads.data),
             extension_id        = extension_id,
             extension_userdata  = extension.get_user_data(),
             )

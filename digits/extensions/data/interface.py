@@ -22,6 +22,12 @@ class DataIngestionInterface(object):
         for k, v in self.userdata.items():
             setattr(self, k, v)
 
+    def encode_entry(self, entry):
+        """
+        Return numpy.ndarray
+        """
+        raise NotImplementedError
+
     @staticmethod
     def get_category():
         raise NotImplementedError
@@ -55,9 +61,6 @@ class DataIngestionInterface(object):
         return serializable user data
         """
         return self.userdata
-
-    def format_entry(self, entry):
-        raise NotImplementedError
 
     def itemize_entries(self, stage):
         raise NotImplementedError

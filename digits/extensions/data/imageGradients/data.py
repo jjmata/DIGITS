@@ -25,6 +25,22 @@ class DataIngestion(DataIngestionInterface):
         # Used to calculate the gradients later
         self.yy, self.xx = np.mgrid[:self.image_height, :self.image_width].astype('float')
 
+    @override
+    def encode_entry(self, entry):
+        xslope, yslope = np.random.random_sample(2) - 0.5
+        label = np.array([xslope, yslope])
+        a = xslope * 255 / self.image_width
+        b = yslope * 255 / self.image_height
+        image = a * (self.xx - self.image_width/2) + b * (self.yy - self.image_height/2) + 127.5
+
+        image = image.astype('uint8')
+
+        # convert to 3D tensors
+        image = image[np.newaxis, ...]
+        label = label[np.newaxis, np.newaxis, ...]
+
+        return image, label
+
     @staticmethod
     @override
     def get_category():
@@ -53,22 +69,6 @@ class DataIngestion(DataIngestionInterface):
     @override
     def get_title():
         return "Image Gradients"
-
-    @override
-    def format_entry(self, entry):
-        xslope, yslope = np.random.random_sample(2) - 0.5
-        label = np.array([xslope, yslope])
-        a = xslope * 255 / self.image_width
-        b = yslope * 255 / self.image_height
-        image = a * (self.xx - self.image_width/2) + b * (self.yy - self.image_height/2) + 127.5
-
-        image = image.astype('uint8')
-
-        # convert to 3D tensors
-        image = image[np.newaxis, ...]
-        label = label[np.newaxis, np.newaxis, ...]
-
-        return image, label
 
     @override
     def itemize_entries(self, stage):

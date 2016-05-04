@@ -30,8 +30,6 @@ import caffe_pb2
 
 logger = logging.getLogger('digits.tools.create_dataset')
 
-BATCH_SIZE = 256
-
 class DbWriter(threading.Thread):
     """
     Abstract class for writing to databases
@@ -79,7 +77,9 @@ class LmdbWriter(DbWriter):
 
     def __init__(self, dataset_dir, stage, feature_encoding, label_encoding, **kwargs):
         self.stage = stage
-        os.makedirs(os.path.join(dataset_dir, stage))
+        db_dir = os.path.join(dataset_dir, stage)
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir)
         super(LmdbWriter, self).__init__(dataset_dir, **kwargs)
 
         # create LMDB for features
@@ -217,7 +217,7 @@ class Encoder(threading.Thread):
             data = []
             for entry_id in batch:
                 # call into extension to format entry into number arrays
-                feature, label = self.extension.format_entry(entry_id)
+                feature, label = self.extension.encode_entry(entry_id)
 
                 # check feature and label shapes
                 if self.feature_shape is None:
@@ -244,7 +244,7 @@ class Encoder(threading.Thread):
 
 class DbCreator(object):
 
-    def create_db(self, extension, stage, dataset_dir, num_threads, feature_encoding, label_encoding):
+    def create_db(self, extension, stage, dataset_dir, batch_size, num_threads, feature_encoding, label_encoding):
         # retrieve itemized list of entries
         entry_ids = extension.itemize_entries(stage)
         entry_count = len(entry_ids)
@@ -265,7 +265,7 @@ class DbCreator(object):
             batch = []
             for entry_id in entry_ids:
                 batch.append(entry_id)
-                if len(batch) >= BATCH_SIZE:
+                if len(batch) >= batch_size:
                     # queue this batch
                     encoder_queue.put(batch)
                     batch = []
@@ -347,7 +347,7 @@ class DbCreator(object):
 """
 Create a generic DB
 """
-def create_generic_db(jobs_dir, dataset_id, stage, num_threads):
+def create_generic_db(jobs_dir, dataset_id, stage):
 
     # job directory defaults to that defined in DIGITS config
     if jobs_dir == 'none':
@@ -367,9 +367,12 @@ def create_generic_db(jobs_dir, dataset_id, stage, num_threads):
     feature_encoding = dataset.feature_encoding
     label_encoding = dataset.label_encoding
 
+    batch_size = dataset.batch_size
+    num_threads = dataset.num_threads
+
     # create main DB creator object and execute main method
     db_creator = DbCreator()
-    db_creator.create_db(extension, stage, dataset_dir, num_threads, feature_encoding, label_encoding)
+    db_creator.create_db(extension, stage, dataset_dir, batch_size, num_threads, feature_encoding, label_encoding)
 
     logger.info('Generic DB creation Done')
 
@@ -393,19 +396,13 @@ if __name__ == '__main__':
             help='Stage (train, val, test)',
             )
 
-    parser.add_argument('--numthreads',
-            type=int,
-            default=4,
-            help = 'Number of encoder threads to use')
-
     args = vars(parser.parse_args())
 
     try:
         create_generic_db(
             args['jobs_dir'],
             args['dataset'],
-            args['stage'],
-            args['numthreads']
+            args['stage']
                 )
     except Exception as e:
         logger.error('%s: %s' % (type(e).__name__, e.message))

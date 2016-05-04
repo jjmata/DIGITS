@@ -35,6 +35,24 @@ class GenericDatasetForm(DatasetForm):
             tooltip = "Using either of these compression formats can save disk space, but can also require marginally more time for training."
             )
 
+    batch_size = utils.forms.IntegerField('Encoder batch size',
+            validators=[
+                validators.DataRequired(),
+                validators.NumberRange(min=1),
+                ],
+            default = 32,
+            tooltip = "Encode data in batches of specified number of entries"
+            )
+
+    num_threads = utils.forms.IntegerField('Number of encoder threads',
+            validators=[
+                validators.DataRequired(),
+                validators.NumberRange(min=1),
+                ],
+            default = 4,
+            tooltip = "Use specified number of encoder threads"
+            )
+
     backend = wtforms.SelectField('DB backend',
             choices = [
                 ('lmdb', 'LMDB'),

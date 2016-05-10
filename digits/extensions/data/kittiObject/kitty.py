@@ -278,4 +278,23 @@ def resize_bbox_list(bboxlist, rescale_x=1, rescale_y=1):
             bboxListNew.append(abox)
         return bboxListNew
 
+def pad_image(self, img):
+        """
+        pad a single image to the dimensions specified in form
+        """
+        src_shape = img.shape
+        src_height = src_shape[0]
+        src_width = src_shape[1]
 
+        if self.padding_image_width < src_width:
+            raise ValueError("Source image width %d is greater than padding width %d" % (src_width, self.padding_image_width) )
+
+        if self.padding_image_height < src_height:
+            raise ValueError("Source image height %d is greater than padding height %d" % (src_height, self.padding_image_height) )
+
+        x_pad = self.padding_image_width - src_width
+        y_pad = self.padding_image_height - src_height
+
+        pad_image = cv.copyMakeBorder(img, 0, y_pad, 0, x_pad,
+                                  cv.BORDER_CONSTANT, value=(0, 0, 0))
+        return pad_image

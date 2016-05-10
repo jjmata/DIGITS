@@ -8,7 +8,6 @@ from .job import GenericDatasetJob
 
 from digits import dataset, model, utils
 from digits import extensions
-from digits.utils.forms import fill_form_if_cloned, save_form_to_job
 from digits.utils.routing import request_wants_json, job_from_request
 from digits.webapp import app, scheduler
 
@@ -23,8 +22,15 @@ def new(extension_id):
 
     form = GenericDatasetForm()
 
+    ## Is there a request to clone a job with ?clone=<job_id>
+    utils.forms.fill_form_if_cloned(form)
+
     extension = extensions.data.get_extension(extension_id)
     extension_form = extension.get_dataset_form()
+
+    ## Is there a request to clone a job with ?clone=<job_id>
+    utils.forms.fill_form_if_cloned(extension_form)
+
     rendered_extension = flask.render_template_string(extension.get_dataset_template(), form=extension_form)
 
     return flask.render_template('datasets/generic/new.html',
@@ -32,7 +38,7 @@ def new(extension_id):
         extension_id = extension_id,
         extension_html = rendered_extension,
         form=form
-    	)
+        )
 
 @blueprint.route('create.json/<extension_id>', methods=['POST'])
 @blueprint.route('/create/<extension_id>', methods=['POST'], strict_slashes=False)
@@ -51,9 +57,9 @@ def create(extension_id):
     extension_form_valid = extension_form.validate_on_submit()
 
     if not (extension_form_valid and form_valid):
-    	# merge errors
-    	errors = form.errors.copy()
-    	errors.update(extension_form.errors)
+        # merge errors
+        errors = form.errors.copy()
+        errors.update(extension_form.errors)
 
         rendered_extension = flask.render_template_string(extension_class.get_dataset_template(), form=extension_form)
 
@@ -84,6 +90,10 @@ def create(extension_id):
             extension_id        = extension_id,
             extension_userdata  = extension.get_user_data(),
             )
+
+        ## Save form data with the job so we can easily clone it later.
+        utils.forms.save_form_to_job(job, form)
+        utils.forms.save_form_to_job(job, extension_form)
 
         # schedule tasks
         scheduler.add_job(job)

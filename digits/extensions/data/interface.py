@@ -37,7 +37,15 @@ class DataIngestionInterface(object):
         raise NotImplementedError
 
     @staticmethod
-    def get_dataset_template():
+    def get_dataset_template(form):
+        """
+        parameters:
+        - form: form returned by get_dataset_form(). This may be populated with values if the job was cloned
+        return:
+        - (template, context) tuple
+          template is a Jinja template to use for rendering dataset creation options
+          context is a dictionary of context variables to use for rendering the form
+        """
         raise NotImplementedError
 
     @staticmethod

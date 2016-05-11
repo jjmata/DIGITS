@@ -30,7 +30,8 @@ def new(extension_id):
     ## Is there a request to clone a job with ?clone=<job_id>
     utils.forms.fill_form_if_cloned(extension_form)
 
-    rendered_extension = flask.render_template_string(extension.get_dataset_template(), form=extension_form)
+    template, context = extension.get_dataset_template(extension_form)
+    rendered_extension = flask.render_template_string(template, **context)
 
     return flask.render_template('datasets/generic/new.html',
         extension_title = extension.get_title(),
@@ -60,7 +61,8 @@ def create(extension_id):
         errors = form.errors.copy()
         errors.update(extension_form.errors)
 
-        rendered_extension = flask.render_template_string(extension_class.get_dataset_template(), form=extension_form)
+        template, context = extension_class.get_dataset_template(extension_form)
+        rendered_extension = flask.render_template_string(template, **context)
 
         if request_wants_json():
             return flask.jsonify({'errors': errors}), 400

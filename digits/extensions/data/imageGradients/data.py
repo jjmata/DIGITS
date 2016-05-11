@@ -58,12 +58,19 @@ class DataIngestion(DataIngestionInterface):
 
     @staticmethod
     @override
-    def get_dataset_template():
+    def get_dataset_template(form):
         """
-        return template
+        parameters:
+        - form: form returned by get_dataset_form(). This may be populated with values if the job was cloned
+        return:
+        - (template, context) tuple
+          template is a Jinja template to use for rendering dataset creation options
+          context is a dictionary of context variables to use for rendering the form
         """
         extension_dir = os.path.dirname(os.path.abspath(__file__))
-        return open(os.path.join(extension_dir, TEMPLATE), "r").read()
+        template = open(os.path.join(extension_dir, TEMPLATE), "r").read()
+        context = {'form': form}
+        return (template, context)
 
     @staticmethod
     @override

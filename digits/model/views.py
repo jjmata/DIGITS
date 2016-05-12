@@ -15,7 +15,7 @@ from . import forms
 from . import images as model_images
 from . import ModelJob
 import digits
-from digits import frameworks
+from digits import frameworks, extensions
 from digits.utils import time_filters
 from digits.utils.routing import request_wants_json
 from digits.webapp import app, scheduler
@@ -139,6 +139,16 @@ def customize():
             'network': job.train_task().get_network_desc(),
             'snapshot': snapshot
             })
+
+@blueprint.route('/view-config/<extension_id>', methods=['GET'])
+def view_config(extension_id):
+    """
+    Returns a rendering of a view extension configuration template
+    """
+    extension = extensions.view.get_extension(extension_id)
+    config_form = extension.get_config_form()
+    template, context = extension.get_config_template(config_form)
+    return flask.render_template_string(template, **context)
 
 @blueprint.route('/visualize-network', methods=['POST'])
 def visualize_network():

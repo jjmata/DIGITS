@@ -261,7 +261,9 @@ def show(job):
     """
     Called from digits.model.views.models_show()
     """
-    return flask.render_template('models/images/generic/show.html', job=job)
+    data_extension_id =  job.dataset.extension_id if isinstance(job.dataset, GenericDatasetJob) else None
+    view_extensions = get_view_extensions(data_extension_id)
+    return flask.render_template('models/images/generic/show.html', job=job, view_extensions=view_extensions)
 
 @blueprint.route('/large_graph', methods=['GET'])
 def large_graph():
@@ -533,3 +535,10 @@ def get_previous_network_snapshots(extension_id):
         prev_network_snapshots.append(e)
     return prev_network_snapshots
 
+def get_view_extensions(dataset_extension_id):
+    views = []
+    view_extensions = extensions.view.get_extensions()
+    for view_extension in view_extensions:
+        if view_extension.supports_dataset(dataset_extension_id):
+            views.append(view_extension)
+    return views

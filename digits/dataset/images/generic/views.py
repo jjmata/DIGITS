@@ -120,12 +120,9 @@ def show(job):
     """
     return flask.render_template('datasets/images/generic/show.html', job=job)
 
-@blueprint.route('/summary', methods=['GET'])
-def summary():
+def summary(job):
     """
-    Return a short HTML summary of a DatasetJob
+    Return a short HTML summary of a GenericImageDatasetJob
     """
-    job = job_from_request()
-
     return flask.render_template('datasets/images/generic/summary.html', dataset=job)
 

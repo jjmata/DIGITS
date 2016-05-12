@@ -64,19 +64,6 @@ def home():
                                 },
                             }
 
-        # add dataset options for known dataset extensions
-        data_extensions = extensions.data.get_extensions()
-        for extension in data_extensions:
-            ext_category = extension.get_category()
-            ext_title = extension.get_title()
-            ext_id = extension.get_id()
-            if ext_category not in new_dataset_options:
-                new_dataset_options[ext_category] = {}
-            new_dataset_options[ext_category][ext_id] = {
-                    'title': ext_title,
-                    'url': flask.url_for('digits.dataset.generic.views.new', extension_id=ext_id),
-                }
-
         new_model_options = {
                                 'Images': {
                                     'image-classification': {
@@ -89,6 +76,25 @@ def home():
                                     },
                                 },
                             }
+
+        # add dataset options for known dataset extensions
+        data_extensions = extensions.data.get_extensions()
+        for extension in data_extensions:
+            ext_category = extension.get_category()
+            ext_title = extension.get_title()
+            ext_id = extension.get_id()
+            if ext_category not in new_dataset_options:
+                new_dataset_options[ext_category] = {}
+            new_dataset_options[ext_category][ext_id] = {
+                    'title': ext_title,
+                    'url': flask.url_for('digits.dataset.generic.views.new', extension_id=ext_id),
+                }
+            if ext_category not in new_model_options:
+                new_model_options[ext_category] = {}
+            new_model_options[ext_category][ext_id] = {
+                    'title': ext_title,
+                    'url': flask.url_for('digits.model.images.generic.views.new', extension_id=ext_id),
+                }
 
         return flask.render_template('home.html',
                 new_dataset_options = new_dataset_options,

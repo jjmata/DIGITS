@@ -6,8 +6,7 @@ import flask
 from .forms import GenericDatasetForm
 from .job import GenericDatasetJob
 
-from digits import dataset, model, utils
-from digits import extensions
+from digits import dataset, extensions, model, utils
 from digits.utils.routing import request_wants_json, job_from_request
 from digits.webapp import app, scheduler
 
@@ -114,6 +113,9 @@ def show(job):
     """
     return flask.render_template('datasets/generic/show.html', job=job)
 
-
-
+def summary(job):
+    """
+    Return a short HTML summary of a GenericDatasetJob
+    """
+    return flask.render_template('datasets/generic/summary.html', dataset=job)
 

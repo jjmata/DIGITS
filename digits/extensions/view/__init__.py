@@ -1,12 +1,14 @@
 # Copyright (c) 2016, NVIDIA CORPORATION.  All rights reserved.
 from __future__ import absolute_import
 
-from . import imageGradients
 from . import rawData
+from . import imageGradients
+from . import boundingBox
 
 view_extensions = {
-	imageGradients.Visualization,
 	rawData.Visualization,
+	imageGradients.Visualization,
+	boundingBox.Visualization,
 }
 
 def get_extensions():

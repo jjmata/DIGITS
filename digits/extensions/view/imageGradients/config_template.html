@@ -12,5 +12,11 @@
     {{ form.arrow_color(class='form-control') }}
 </div>
 
+<div class="form-group{{mark_errors([form.arrow_size])}}">
+    {{ form.arrow_size.label }}
+    {{ form.arrow_size.tooltip }}
+    {{ form.arrow_size(class='form-control') }}
+</div>
+
 
 

@@ -27,10 +27,7 @@
     </div>
 
     <div class="col-sm-6">
-        {% for name, blob in network_outputs.iteritems() %}
-        <h4>{{name}}</h4>
-        {{blob}}
-        {% endfor %}
+        {{ inference_view_html|safe }}
     </div>
     {% else %}
     <div class="alert alert-danger">

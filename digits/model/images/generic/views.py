@@ -318,7 +318,7 @@ def infer_one():
     inference_job.wait_completion()
 
     # retrieve inference data
-    inputs, outputs, visualizations = inference_job.get_data()
+    inputs, outputs, model_visualization = inference_job.get_data()
 
     # delete job folder and remove from scheduler list
     scheduler.delete_job(inference_job)
@@ -327,19 +327,21 @@ def infer_one():
         os.remove(image_path)
 
     image = None
+    inference_view_html = None
     if inputs is not None and len(inputs['data']) == 1:
         image = utils.image.embed_image_html(inputs['data'][0])
+        inference_view_html = get_inference_visualizations(model_job.dataset, inputs, outputs)[0]
 
     if request_wants_json():
         return flask.jsonify({'outputs': dict((name, blob.tolist()) for name,blob in outputs.iteritems())})
     else:
         return flask.render_template('models/images/generic/infer_one.html',
-                model_job       = model_job,
-                job             = inference_job,
-                image_src       = image,
-                network_outputs = outputs,
-                visualizations  = visualizations,
-                total_parameters= sum(v['param_count'] for v in visualizations if v['vis_type'] == 'Weights'),
+                model_job           = model_job,
+                job                 = inference_job,
+                image_src           = image,
+                inference_view_html = inference_view_html,
+                visualizations      = model_visualization,
+                total_parameters    = sum(v['param_count'] for v in model_visualization if v['vis_type'] == 'Weights'),
                 )
 
 @blueprint.route('/infer_db.json', methods=['POST'])
@@ -388,8 +390,10 @@ def infer_db():
         # an error occurred
         outputs = None
 
+    inference_views_html = None
     if inputs is not None:
         keys = [str(idx) for idx in inputs['ids']]
+        inference_views_html = get_inference_visualizations(model_job.dataset, inputs, outputs)
     else:
         keys = None
 
@@ -400,10 +404,10 @@ def infer_db():
         return flask.jsonify({'outputs': result})
     else:
         return flask.render_template('models/images/generic/infer_db.html',
-                model_job       = model_job,
-                job             = inference_job,
-                keys            = keys,
-                network_outputs = outputs,
+                model_job            = model_job,
+                job                  = inference_job,
+                keys                 = keys,
+                inference_views_html = inference_views_html,
                 )
 
 @blueprint.route('/infer_many.json', methods=['POST'])
@@ -482,8 +486,10 @@ def infer_many():
         # an error occurred
         outputs = None
 
+    inference_views_html = None
     if inputs is not None:
         paths = [paths[idx] for idx in inputs['ids']]
+        inference_views_html = get_inference_visualizations(model_job.dataset, inputs, outputs)
 
     if request_wants_json():
         result = {}
@@ -492,10 +498,10 @@ def infer_many():
         return flask.jsonify({'outputs': result})
     else:
         return flask.render_template('models/images/generic/infer_many.html',
-                model_job       = model_job,
-                job             = inference_job,
-                paths           = paths,
-                network_outputs = outputs,
+                model_job            = model_job,
+                job                  = inference_job,
+                paths                = paths,
+                inference_views_html = inference_views_html,
                 )
 
 def get_datasets(extension_id):
@@ -505,6 +511,32 @@ def get_datasets(extension_id):
     else:
         jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageDatasetJob) and (j.status.is_running() or j.status == Status.DONE)]
     return [(j.id(), j.name()) for j in sorted(jobs, cmp=lambda x,y: cmp(y.id(), x.id()))]
+
+def get_inference_visualizations(dataset, inputs, outputs):
+    # get extension ID from form and retrieve extension class
+    view_extension_id = flask.request.form['view_extension_id']
+    extension_class = extensions.view.get_extension(view_extension_id)
+    extension_form = extension_class.get_config_form()
+
+    # validate form
+    extension_form_valid = extension_form.validate_on_submit()
+    if not extension_form_valid:
+        raise ValueError("Extension form validation failed with %s" % repr(extension_form.errors))
+
+    # create instance of extension class
+    extension = extension_class(dataset, **extension_form.data)
+
+    visualizations = []
+    # process data
+    n = len(inputs['ids'])
+    for idx in xrange(n):
+        input_id = inputs['ids'][idx]
+        input_data = inputs['data'][idx]
+        output_data = {key:outputs[key][idx] for key in outputs}
+        data = extension.process_data(input_id, input_data, output_data)
+        template, context = extension.get_view_template(data)
+        visualizations.append(flask.render_template_string(template, **context))
+    return visualizations
 
 def get_previous_networks(extension_id):
     if extension_id:

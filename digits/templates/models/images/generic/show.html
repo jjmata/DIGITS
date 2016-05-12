@@ -148,7 +148,7 @@ updateSnapshotList({% autoescape false %}{{task.snapshot_list()}}{% endautoescap
                     <div class="col-sm-6">
                         <h3>Select Visualization Method</h3>
                         <div class="form-group">
-                            <select id="visualization_method" name="visualization_method" class="form-control">
+                            <select id="view_extension_id" name="view_extension_id" class="form-control">
                                 {% for extension in view_extensions %}
                                     <option value="{{ extension.get_id() }}">{{ extension.get_title() }}</option>
                                 {% endfor %}
@@ -157,11 +157,11 @@ updateSnapshotList({% autoescape false %}{{task.snapshot_list()}}{% endautoescap
                     </div>
                     <div class="col-sm-6">
                         <h3>Visualization Options</h3>
-                        <div id="visualization_method-details">
+                        <div id="view_extension-details">
                         </div>
                     </div>
                     <script>
-                        $("#visualization_method").change(function() {
+                        $("#view_extension_id").change(function() {
                             if ($(this).val()) {
                                 $.ajax("/models/view-config/" + $(this).val(),
                                     {
@@ -169,15 +169,15 @@ updateSnapshotList({% autoescape false %}{{task.snapshot_list()}}{% endautoescap
                                         }
                                     )
                                 .done(function(data) {
-                                    $("#visualization_method-details").html(data);
+                                    $("#view_extension-details").html(data);
                                     })
                                 .fail(function(data) {
-                                    $("#visualization_method-details").html("");
+                                    $("#view_extension-details").html("");
                                     errorAlert(data);
                                     });
                                 }
                             });
-                        $("#visualization_method").change();
+                        $("#view_extension_id").change();
                     </script>
                 </div>
 

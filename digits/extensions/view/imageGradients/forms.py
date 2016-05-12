@@ -17,8 +17,17 @@ class ConfigForm(Form):
     arrow_color = wtforms.SelectField('Arrow color',
             choices = [
                 ('red', 'Red'),
-                ('green', 'green'),
-                ('blue', 'blue'),
+                ('green', 'Green'),
+                ('blue', 'Blue'),
                 ],
             default='red',
+            )
+
+    arrow_size = utils.forms.IntegerField('Arrow size (%)',
+            validators=[
+                validators.DataRequired(),
+                validators.NumberRange(min=1),
+                ],
+            default = 80,
+            tooltip = "Expressed as percentage of input image"
             )

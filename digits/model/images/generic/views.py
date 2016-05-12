@@ -34,9 +34,9 @@ def new():
     form = GenericImageModelForm()
     form.dataset.choices = get_datasets(extension_id)
     form.standard_networks.choices = []
-    form.previous_networks.choices = get_previous_networks(extension_id)
+    form.previous_networks.choices = get_previous_networks()
 
-    prev_network_snapshots = get_previous_network_snapshots(extension_id)
+    prev_network_snapshots = get_previous_network_snapshots()
 
     ## Is there a request to clone a job with ?clone=<job_id>
     fill_form_if_cloned(form)
@@ -47,7 +47,7 @@ def new():
             form = form,
             frameworks = frameworks.get_frameworks(),
             previous_network_snapshots = prev_network_snapshots,
-            previous_networks_fullinfo = get_previous_networks_fulldetails(extension_id),
+            previous_networks_fullinfo = get_previous_networks_fulldetails(),
             multi_gpu = config_value('caffe_root')['multi_gpu'],
             )
 
@@ -67,9 +67,9 @@ def create():
     form = GenericImageModelForm()
     form.dataset.choices = get_datasets(extension_id)
     form.standard_networks.choices = []
-    form.previous_networks.choices = get_previous_networks(extension_id)
+    form.previous_networks.choices = get_previous_networks()
 
-    prev_network_snapshots = get_previous_network_snapshots(extension_id)
+    prev_network_snapshots = get_previous_network_snapshots()
 
     ## Is there a request to clone a job with ?clone=<job_id>
     fill_form_if_cloned(form)
@@ -84,7 +84,7 @@ def create():
                     form = form,
                     frameworks = frameworks.get_frameworks(),
                     previous_network_snapshots = prev_network_snapshots,
-                    previous_networks_fullinfo = get_previous_networks_fulldetails(extension_id),
+                    previous_networks_fullinfo = get_previous_networks_fulldetails(),
                     multi_gpu = config_value('caffe_root')['multi_gpu'],
                     ), 400
 
@@ -538,27 +538,17 @@ def get_inference_visualizations(dataset, inputs, outputs):
         visualizations.append(flask.render_template_string(template, **context))
     return visualizations
 
-def get_previous_networks(extension_id):
-    if extension_id:
-        jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)
-            and isinstance(j.dataset, GenericDatasetJob) and j.dataset.extension_id == extension_id]
-    else:
-        jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)
-            and isinstance(j.dataset, GenericImageDatasetJob)]
+def get_previous_networks():
+    jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)]
     return [(j.id(), j.name()) for j in sorted(jobs, cmp=lambda x,y: cmp(y.id(), x.id()))]
 
-def get_previous_networks_fulldetails(extension_id):
-    if extension_id:
-        jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)
-            and isinstance(j.dataset, GenericDatasetJob) and j.dataset.extension_id == extension_id]
-    else:
-        jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)
-            and isinstance(j.dataset, GenericImageDatasetJob)]
+def get_previous_networks_fulldetails():
+    jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)]
     return [(j) for j in sorted(jobs, cmp=lambda x,y: cmp(y.id(), x.id()))]
 
-def get_previous_network_snapshots(extension_id):
+def get_previous_network_snapshots():
     prev_network_snapshots = []
-    for job_id, _ in get_previous_networks(extension_id):
+    for job_id, _ in get_previous_networks():
         job = scheduler.get_job(job_id)
         e = [(0, 'None')] + [(epoch, 'Epoch #%s' % epoch)
                 for _, epoch in reversed(job.train_task().snapshots)]

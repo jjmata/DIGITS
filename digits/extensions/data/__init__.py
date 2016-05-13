@@ -2,9 +2,11 @@
 from __future__ import absolute_import
 
 from . import imageGradients
+from . import kittiObject
 
 data_extensions = {
 	imageGradients.DataIngestion,
+	kittiObject.DataIngestion,
 }
 
 def get_extensions():

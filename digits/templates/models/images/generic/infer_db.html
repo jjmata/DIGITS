@@ -27,24 +27,34 @@
 
 {% block job_content_details %}
 
+{% if summary_html %}
+<div class="row">
+    <h3>Summary</h3>
+    {{summary_html|safe}}
+</div>
+{% endif %}
+
 {% if inference_views_html %}
-<table class="table">
-    <tr>
-        <th>Index</th>
-        <th>Key</th>
-        <th>Data</th>
-    </tr>
-    {% for key in keys %}
-    <tr>
-        <td>{{loop.index}}</td>
-        <td>{{key}}</td>
-        <td>
-            {% set index=loop.index0 %}
-            {{ inference_views_html[index]|safe }}
-        </td>
-    </tr>
-    {% endfor %}
-</table>
+<div class="row">
+    <h3>Visualizations</h3>
+    <table class="table">
+        <tr>
+            <th>Index</th>
+            <th>Key</th>
+            <th>Data</th>
+        </tr>
+        {% for key in keys %}
+        <tr>
+            <td>{{loop.index}}</td>
+            <td>{{key}}</td>
+            <td>
+                {% set index=loop.index0 %}
+                {{ inference_views_html[index]|safe }}
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
 {% endif %}
 
 {% endblock %}

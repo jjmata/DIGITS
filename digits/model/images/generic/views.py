@@ -262,7 +262,7 @@ def show(job):
     Called from digits.model.views.models_show()
     """
     data_extension_id =  job.dataset.extension_id if isinstance(job.dataset, GenericDatasetJob) else None
-    view_extensions = get_view_extensions(data_extension_id)
+    view_extensions = get_view_extensions()
     return flask.render_template('models/images/generic/show.html', job=job, view_extensions=view_extensions)
 
 @blueprint.route('/large_graph', methods=['GET'])
@@ -393,7 +393,7 @@ def infer_db():
     inference_views_html = None
     if inputs is not None:
         keys = [str(idx) for idx in inputs['ids']]
-        inference_views_html = get_inference_visualizations(model_job.dataset, inputs, outputs)
+        inference_views_html, summary_html = get_inference_visualizations(model_job.dataset, inputs, outputs)
     else:
         keys = None
 
@@ -408,6 +408,7 @@ def infer_db():
                 job                  = inference_job,
                 keys                 = keys,
                 inference_views_html = inference_views_html,
+                summary_html         = summary_html,
                 )
 
 @blueprint.route('/infer_many.json', methods=['POST'])
@@ -489,7 +490,7 @@ def infer_many():
     inference_views_html = None
     if inputs is not None:
         paths = [paths[idx] for idx in inputs['ids']]
-        inference_views_html = get_inference_visualizations(model_job.dataset, inputs, outputs)
+        inference_views_html, summary_html = get_inference_visualizations(model_job.dataset, inputs, outputs)
 
     if request_wants_json():
         result = {}
@@ -502,6 +503,7 @@ def infer_many():
                 job                  = inference_job,
                 paths                = paths,
                 inference_views_html = inference_views_html,
+                summary_html         = summary_html,
                 )
 
 def get_datasets(extension_id):
@@ -536,7 +538,11 @@ def get_inference_visualizations(dataset, inputs, outputs):
         data = extension.process_data(input_id, input_data, output_data)
         template, context = extension.get_view_template(data)
         visualizations.append(flask.render_template_string(template, **context))
-    return visualizations
+    # get summary
+    template, context = extension.get_summary_template()
+    summary = flask.render_template_string(template, **context) if template else None
+
+    return visualizations, summary
 
 def get_previous_networks():
     jobs = [j for j in scheduler.jobs.values() if isinstance(j, GenericImageModelJob)]
@@ -557,10 +563,10 @@ def get_previous_network_snapshots():
         prev_network_snapshots.append(e)
     return prev_network_snapshots
 
-def get_view_extensions(dataset_extension_id):
-    views = []
-    view_extensions = extensions.view.get_extensions()
-    for view_extension in view_extensions:
-        if view_extension.supports_dataset(dataset_extension_id):
-            views.append(view_extension)
-    return views
+def get_view_extensions():
+    view_extensions = {}
+    all_extensions = extensions.view.get_extensions()
+    for extension in all_extensions:
+        view_extensions[extension.get_id()] = extension.get_title()
+    return view_extensions
+

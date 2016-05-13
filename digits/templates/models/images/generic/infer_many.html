@@ -27,22 +27,32 @@
 
 {% block job_content_details %}
 
+{% if summary_html %}
+<div class="row">
+    <h3>Summary</h3>
+    {{summary_html|safe}}
+</div>
+{% endif %}
+
 {% if paths %}
-<table class="table">
-    <tr>
-        <td></td>
-        <th>Image</th>
-        <th>Data</th>
-    </tr>
-    {% for path in paths %}
-    <tr>
-        <td>{{loop.index}}</td>
-        <td>{{path}}</td>
-        {% set index=loop.index0 %}
-        <td>{{inference_views_html[index]|safe}}</td>
-    </tr>
-    {% endfor %}
-</table>
+<div class="row">
+    <h3>Visualizations</h3>
+    <table class="table">
+        <tr>
+            <td></td>
+            <th>Image</th>
+            <th>Data</th>
+        </tr>
+        {% for path in paths %}
+        <tr>
+            <td>{{loop.index}}</td>
+            <td>{{path}}</td>
+            {% set index=loop.index0 %}
+            <td>{{inference_views_html[index]|safe}}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
 {% endif %}
 
 {% endblock %}

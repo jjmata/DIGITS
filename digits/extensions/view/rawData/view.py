@@ -48,7 +48,7 @@ class Visualization(VisualizationInterface):
 
     @staticmethod
     def get_id():
-        return 'raw-data'
+        return 'all-raw-data'
 
     @staticmethod
     def get_title():
@@ -70,17 +70,3 @@ class Visualization(VisualizationInterface):
         Process one inference and return data to visualize
         """
         return output_data
-
-    @staticmethod
-    def supports_dataset(data_extension_id):
-        """
-        returns true if view extension supports datasets created with specified data extension id
-        extension_id may be None if dataset was not created using a data extension
-        """
-        # supports all datasets
-        return True
-
-
-
-
-

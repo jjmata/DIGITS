@@ -111,16 +111,3 @@ class Visualization(VisualizationInterface):
 
         image_html = digits.utils.image.embed_image_html(image)
         return {'image': image_html, 'gradients':[output_vector[0], output_vector[1]]}
-
-    @staticmethod
-    def supports_dataset(data_extension_id):
-        """
-        returns true if view extension supports datasets created with specified data extension id
-        extension_id may be None if dataset was not created using a data extension
-        """
-        return data_extension_id == Visualization.get_id()
-
-
-
-
-

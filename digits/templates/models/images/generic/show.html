@@ -149,8 +149,8 @@ updateSnapshotList({% autoescape false %}{{task.snapshot_list()}}{% endautoescap
                         <h3>Select Visualization Method</h3>
                         <div class="form-group">
                             <select id="view_extension_id" name="view_extension_id" class="form-control">
-                                {% for extension in view_extensions %}
-                                    <option value="{{ extension.get_id() }}">{{ extension.get_title() }}</option>
+                                {% for key in view_extensions.keys()|sort %}
+                                    <option value="{{ key }}">{{ view_extensions[key] }}</option>
                                 {% endfor %}
                             </select>
                         </div>

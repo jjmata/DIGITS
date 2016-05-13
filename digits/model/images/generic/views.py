@@ -516,8 +516,12 @@ def get_datasets(extension_id):
 
 def get_inference_visualizations(dataset, inputs, outputs):
     # get extension ID from form and retrieve extension class
-    view_extension_id = flask.request.form['view_extension_id']
-    extension_class = extensions.view.get_extension(view_extension_id)
+    if 'view_extension_id' in flask.request.form:
+        view_extension_id = flask.request.form['view_extension_id']
+        extension_class = extensions.view.get_extension(view_extension_id)
+    else:
+        # no view extension specified, use default
+        extension_class = extensions.view.get_default_extension()
     extension_form = extension_class.get_config_form()
 
     # validate form

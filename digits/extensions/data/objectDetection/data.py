@@ -2,18 +2,18 @@
 from __future__ import absolute_import
 
 import caffe
-import cv2 as cv
 import numpy as np
 import operator
 import os
+import PIL.Image
 import random
 
-from digits.utils import image, subclass, override, constants
+import digits
+from digits.utils import subclass, override, constants
 from ..interface import DataIngestionInterface
 from .forms import DatasetForm
 from .utils import GroundTruth, GroundTruthObj
-from .utils import cropImage_onlyForImage, cropImage_onlyForLabel
-from .utils import bbox_to_array, resize_bbox_list, resizeImage_onlyForImage
+from .utils import bbox_to_array, resize_bbox_list
 
 TEMPLATE = "template.html"
 
@@ -36,17 +36,6 @@ class DataIngestion(DataIngestionInterface):
         if ((self.resize_image_width is None) ^ (self.resize_image_height is None)):
             raise ValueError("You must specify either both resize_image_width and resize_image_height or none")
 
-        if self.resize_image_width is not None:
-            self.resize_ratio = {
-                'width':  self.resize_image_width/self.padding_image_width,
-                'height': self.resize_image_height/self.padding_image_height,
-                }
-        else:
-            self.resize_ratio = {
-                'width':  1,
-                'height': 1,
-                }
-
         # this will be set when we know the phase we are encoding
         self.ground_truth = None
 
@@ -60,31 +49,28 @@ class DataIngestion(DataIngestionInterface):
         # (1) image part
 
         # load from file
-        img = cv.imread(image_filename, cv.CV_LOAD_IMAGE_UNCHANGED)
+        img = digits.utils.image.load_image(image_filename)
+        if self.channel_conversion != 'none':
+            if img.mode != self.channel_conversion:
+                # convert to different image mode if necessary
+                img = img.convert(self.channel_conversion)
 
         # pad
         img = self.pad_image(img)
 
-        imgSizeX, imgSizeY = img.shape[1], img.shape[0]
-
-        # resize
-        img = resizeImage_onlyForImage(img, self.resize_ratio['width'], self.resize_ratio['height'])
-
-        x_offset = img.shape[1] - imgSizeX
-        y_offset = img.shape[0] - imgSizeY
-
-        # If cropped image is larger than original image, output image will
-        # be zero-padded by the offset amount.
-        if img.shape[1] > imgSizeX:
-            x_offset /= 2
-        if img.shape[0] > imgSizeY:
-            y_offset /= 2
-        img = cropImage_onlyForImage(
-            img,
-            x_offset,
-            y_offset,
-            imgSizeX,
-            imgSizeY)
+        if self.resize_image_width is not None:
+            # resize
+            resize_ratio_x = self.resize_image_width / self.padding_image_width
+            resize_ratio_y = self.resize_image_height / self.padding_image_height
+            img = digits.utils.image.resize_image(
+                img,
+                self.resize_image_height,
+                self.resize_image_width)
+        else:
+            resize_ratio_x = 1
+            resize_ratio_y = 1
+            # convert to numpy array
+            img = np.array(img)
 
         if img.ndim == 2:
             # grayscale
@@ -96,8 +82,6 @@ class DataIngestion(DataIngestionInterface):
                 raise ValueError("Unsupported image shape: %s" % repr(img.shape))
             # HWC -> CHW
             img = img.transpose(2, 0, 1)
-            # BGR to RGB
-            img = img[[2, 1, 0], ...]
 
         # (2) label part
 
@@ -128,8 +112,7 @@ class DataIngestion(DataIngestionInterface):
         bboxList.reverse()
 
         # adjust bboxes according to image cropping
-        bboxList = resize_bbox_list(bboxList, self.resize_ratio['width'], self.resize_ratio['height'])
-        bboxList = cropImage_onlyForLabel(bboxList, x_offset, y_offset, imgSizeX, imgSizeY)
+        bboxList = resize_bbox_list(bboxList, resize_ratio_x, resize_ratio_y)
 
         # return data
         feature = img
@@ -228,7 +211,7 @@ class DataIngestion(DataIngestionInterface):
         image_files = []
         for dirpath, dirnames, filenames in os.walk(folder, followlinks=True):
             for filename in filenames:
-                if filename.lower().endswith(image.SUPPORTED_EXTENSIONS):
+                if filename.lower().endswith(digits.utils.image.SUPPORTED_EXTENSIONS):
                     image_files.append('%s' % os.path.join(folder, filename))
         if len(image_files) == 0:
             raise ValueError("Unable to find supported images in %s" % folder)
@@ -240,9 +223,8 @@ class DataIngestion(DataIngestionInterface):
         """
         pad a single image to the dimensions specified in form
         """
-        src_shape = img.shape
-        src_height = src_shape[0]
-        src_width = src_shape[1]
+        src_width = img.size[0]
+        src_height = img.size[1]
 
         if self.padding_image_width < src_width:
             raise ValueError("Source image width %d is greater than padding width %d" % (src_width, self.padding_image_width))
@@ -250,15 +232,11 @@ class DataIngestion(DataIngestionInterface):
         if self.padding_image_height < src_height:
             raise ValueError("Source image height %d is greater than padding height %d" % (src_height, self.padding_image_height))
 
-        x_pad = self.padding_image_width - src_width
-        y_pad = self.padding_image_height - src_height
+        padded_img = PIL.Image.new(
+            img.mode,
+            (self.padding_image_width, self.padding_image_height),
+            "black")
 
-        pad_image = cv.copyMakeBorder(
-            img,
-            0,
-            y_pad,
-            0,
-            x_pad,
-            cv.BORDER_CONSTANT,
-            value=(0, 0, 0))
-        return pad_image
+        padded_img.paste(img, (0, 0))  # copy to top-left corner
+
+        return padded_img

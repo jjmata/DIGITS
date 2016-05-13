@@ -98,3 +98,14 @@ class DatasetForm(Form):
             ],
         tooltip="Images will be padded to that dimension"
         )
+
+    channel_conversion = utils.forms.SelectField(
+        'Channel conversion',
+        choices=[
+            ('RGB', 'RGB'),
+            ('L', 'Grayscale'),
+            ('none', 'None'),
+            ],
+        default='RGB',
+        tooltip="Perform selected channel conversion."
+        )

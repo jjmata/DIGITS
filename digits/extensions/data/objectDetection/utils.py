@@ -3,7 +3,6 @@
 
 import caffe
 import csv
-import cv2 as cv
 import numpy as np
 import os
 
@@ -257,44 +256,6 @@ def bbox_overlap(abox, bbox):
     overlap_pix = xoverlap * yoverlap
 
     return overlap_pix, overlap_box
-def cropImage_onlyForLabel(bboxList, x_offs, y_offs, dstW, dstH):
-    if len(bboxList) == 0:
-        return bboxList
-    result = []
-    screen = [0, 0, dstW, dstH]
-    for np_bbox in bboxList:
-        abox = np.copy(np_bbox)
-        if x_offs > 0:
-            abox[0] = np_bbox[0] - x_offs
-        if y_offs > 0:
-            abox[1] = np_bbox[1] - y_offs
-        # truncate bottom-right corner:
-        overlap_pix, overlapping_bbox = bbox_overlap(screen, abox)
-        abox[0:3] = overlapping_bbox[0:3]
-        # is this bounding box on-screen?
-        if overlap_pix > 0:
-            result.append(list(abox))
-
-    return result
-
-def cropImage_onlyForImage(img, x_offs, y_offs, dstW, dstH):
-    if x_offs >= 0:
-        img = img[:, x_offs:x_offs+dstW]
-    elif x_offs < 0:
-        img = cv.copyMakeBorder(img, 0, 0, 0, -x_offs, cv.BORDER_CONSTANT, 0)
-    if y_offs >= 0:
-        img = img[y_offs:y_offs+dstH, :]
-    elif y_offs < 0:
-        img = cv.copyMakeBorder(img, 0, -y_offs, 0, 0, cv.BORDER_CONSTANT, 0)
-    return img
-
-def resizeImage_onlyForImage(img, fx, fy):
-    if fx == 1 and fy == 1:
-        return img
-    sz = img.shape
-    img = cv.resize(img, (int(fx*sz[1]), int(fy*sz[0])), interpolation=cv.INTER_AREA)
-    return img
-
 
 def resize_bbox_list(bboxlist, rescale_x=1, rescale_y=1):
         # this is expecting x1,y1,w,h:

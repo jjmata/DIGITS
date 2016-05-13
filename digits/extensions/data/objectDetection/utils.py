@@ -143,7 +143,7 @@ class GroundTruthObj:
         self.object = object_types.get(self.stype, ObjectType.Dontcare)
 
 
-class groundtruth:
+class GroundTruth:
 
     """ this class load the ground truth
     """
@@ -199,6 +199,33 @@ class groundtruth:
         return self._objects_all
 
 # return the # of pixels remaining in a
+
+def pad_bbox(arr, max_bboxes=64, bbox_width=16):
+    if arr.shape[0] > max_bboxes:
+        raise ValueError(
+            'Too many bounding boxes (%d > %d)' % arr.shape[0], max_bboxes
+        )
+    # fill remainder with zeroes:
+    data = np.zeros((max_bboxes+1, bbox_width), dtype='float')
+    # number of bounding boxes:
+    data[0][0] = arr.shape[0]
+    # width of a bounding box:
+    data[0][1] = bbox_width
+    # bounding box data. Merge nothing if no bounding boxes exist.
+    if arr.shape[0] > 0:
+        data[1:1 + arr.shape[0]] = arr
+
+    return data
+
+
+def bbox_to_array(arr, label=0, max_bboxes=64, bbox_width=16):
+    """
+    Converts a 1-dimensional bbox array to an image-like
+    3-dimensional array CHW array
+    """
+    arr = pad_bbox(arr, max_bboxes, bbox_width)
+    return arr[np.newaxis, :, :]
+
 
 def bbox_overlap(abox, bbox):
     # the abox box

@@ -1,0 +1,32 @@
+{# Copyright (c) 2016, NVIDIA CORPORATION.  All rights reserved. #}
+
+{% from "helper.html" import print_flashes %}
+{% from "helper.html" import print_errors %}
+{% from "helper.html" import mark_errors %}
+
+<div class="form-group{{mark_errors([form.source_folder])}}">
+    {{ form.source_folder.label }}
+    {{ form.source_folder.tooltip }}
+    {{ form.source_folder(class='form-control autocomplete_path', placeholder='folder or URL')}}
+</div>
+
+<div class="form-group{{mark_errors([form.target_folder])}}">
+    {{ form.target_folder.label }}
+    {{ form.target_folder.tooltip }}
+    {{ form.target_folder(class='form-control autocomplete_path', placeholder='folder or URL')}}
+</div>
+
+<div class="form-group{{mark_errors([form.folder_pct_val])}}">
+    {{ form.folder_pct_val.label }}
+    {{ form.folder_pct_val.tooltip }}
+    {{ form.folder_pct_val(class='form-control') }}
+</div>
+
+<div class="form-group{{mark_errors([form.channel_conversion])}}">
+    {{ form.channel_conversion.label }}
+    {{ form.channel_conversion.tooltip }}
+    {{ form.channel_conversion(class='form-control') }}
+</div>
+
+
+

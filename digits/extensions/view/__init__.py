@@ -2,11 +2,13 @@
 from __future__ import absolute_import
 
 from . import boundingBox
+from . import imageOutput
 from . import rawData
 
 view_extensions = [
     # set show=True if extension should be listed in known extensions
     {'class': boundingBox.Visualization, 'show': True},
+    {'class': imageOutput.Visualization, 'show': True},
     {'class': rawData.Visualization, 'show': True},
 ]
 

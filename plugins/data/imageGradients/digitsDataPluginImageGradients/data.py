@@ -2,13 +2,13 @@
 from __future__ import absolute_import
 
 from digits.utils import subclass, override, constants
-from ..interface import DataIngestionInterface
+from digits.extensions.data.interface import DataIngestionInterface
 from .forms import DatasetForm
 
 import numpy as np
 import os
 
-TEMPLATE = "template.html"
+TEMPLATE = "templates/template.html"
 
 
 @subclass
@@ -44,14 +44,6 @@ class DataIngestion(DataIngestionInterface):
     @override
     def get_category():
         return "Images"
-
-    @staticmethod
-    def get_default_visibility():
-        """
-        Return whether to show extension in GUI (can be overridden through
-        DIGITS configuration options)
-        """
-        return False
 
     @staticmethod
     @override

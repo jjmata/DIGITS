@@ -6,7 +6,6 @@ from pkg_resources import iter_entry_points
 
 from . import boundingBox
 from . import imageOutput
-from . import imageGradients
 from . import rawData
 
 # Entry point group (this is the key we use to register and
@@ -17,7 +16,6 @@ GROUP = "digits.plugins.view"
 # built-in extensions
 builtin_view_extensions = [
     boundingBox.Visualization,
-    imageGradients.Visualization,
     imageOutput.Visualization,
     rawData.Visualization,
 ]

@@ -83,7 +83,7 @@ def home():
             }
 
         # add dataset options for known dataset extensions
-        data_extensions = config_value('data_extension_list')
+        data_extensions = extensions.data.get_extensions()
         for extension in data_extensions:
             ext_category = extension.get_category()
             ext_title = extension.get_title()

@@ -2,7 +2,6 @@
 from __future__ import absolute_import
 
 from .caffe_option import CaffeOption
-from .extension_list import DataExtensionListOption, ViewExtensionListOption
 from .gpu_list import GpuListOption
 from .jobs_dir import JobsDirOption
 from .log_file import LogFileOption
@@ -28,8 +27,6 @@ def reset():
             SecretKeyOption(),
             CaffeOption(),
             TorchOption(),
-            DataExtensionListOption(),
-            ViewExtensionListOption(),
             ]
 
 reset()
